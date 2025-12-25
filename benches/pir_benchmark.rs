@@ -9,7 +9,6 @@ const RECORD_SIZE: usize = 3;
 fn params() -> LweParams {
     LweParams {
         n: 1024,
-        q: 1u64 << 32,
         p: 256,
         noise_stddev: 6.4,
     }

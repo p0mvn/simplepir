@@ -51,11 +51,11 @@ impl PirServer {
         let cols = self.a.cols; // n
         let inner = self.db.cols; // √N
 
-        let mut data = vec![0u64; rows * cols];
+        let mut data = vec![0u32; rows * cols];
 
         for i in 0..rows {
             for j in 0..cols {
-                let mut sum = 0u64;
+                let mut sum = 0u32;
                 for k in 0..inner {
                     // hint_c[i,j] += db[i,k] * A[k,j]
                     let db_val = self.db.data[i * self.db.cols + k];
@@ -221,11 +221,17 @@ mod tests {
         let seed: MatrixSeed = [42u8; 32];
         let a1 = LweMatrix::from_seed(&seed, 10, 8);
         let a2 = LweMatrix::from_seed(&seed, 10, 8);
-        assert_eq!(a1.data, a2.data, "Same seed should produce identical matrix");
+        assert_eq!(
+            a1.data, a2.data,
+            "Same seed should produce identical matrix"
+        );
 
         // Different seeds should produce different matrices
         let seed2: MatrixSeed = [43u8; 32];
         let a3 = LweMatrix::from_seed(&seed2, 10, 8);
-        assert_ne!(a1.data, a3.data, "Different seeds should produce different matrices");
+        assert_ne!(
+            a1.data, a3.data,
+            "Different seeds should produce different matrices"
+        );
     }
 }

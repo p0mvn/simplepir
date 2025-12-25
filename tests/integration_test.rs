@@ -20,7 +20,6 @@ fn test_pir_round_trip() {
     // Use small parameters for testing (not secure, but fast)
     let params = LweParams {
         n: 16, // small LWE dimension
-        q: 1u64 << 32,
         p: 256,
         noise_stddev: 0.0, // zero noise for deterministic test
     };
@@ -77,7 +76,6 @@ fn test_pir_round_trip_with_noise() {
     // Parameters with small noise
     let params = LweParams {
         n: 32,
-        q: 1u64 << 32,
         p: 256,
         noise_stddev: 3.0, // small but non-zero noise
     };
@@ -115,7 +113,6 @@ fn test_pir_larger_database() {
 
     let params = LweParams {
         n: 16,
-        q: 1u64 << 32,
         p: 256,
         noise_stddev: 0.0,
     };
@@ -152,7 +149,6 @@ fn test_pir_multiple_queries_same_client() {
 
     let params = LweParams {
         n: 16,
-        q: 1u64 << 32,
         p: 256,
         noise_stddev: 0.0,
     };

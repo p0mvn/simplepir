@@ -18,7 +18,7 @@ pub struct PirClient {
 /// Per-query secret state (needed for recovery)
 pub struct QueryState {
     pub row_start: usize,
-    pub secret: Vec<u64>,
+    pub secret: Vec<u32>,
 }
 
 impl PirClient {
@@ -46,11 +46,11 @@ impl PirClient {
         let row_start = group * self.record_size;
 
         // Fresh secret s ∈ ℤ_q^n
-        let secret: Vec<u64> = (0..self.params.n).map(|_| rng.random()).collect();
+        let secret: Vec<u32> = (0..self.params.n).map(|_| rng.random()).collect();
 
         // qu = A·s + e + Δ·u_col
         // Encrypt unit vector: query[i] = Enc(1) if i == col, else Enc(0)
-        let query_data: Vec<u64> = (0..self.db_cols)
+        let query_data: Vec<u32> = (0..self.db_cols)
             .map(|i| {
                 let msg = if i == col { 1 } else { 0 };
                 encrypt(
@@ -99,7 +99,6 @@ mod tests {
         let n = 4; // small LWE dimension for testing
         let params = LweParams {
             n,
-            q: 1u64 << 32,
             p: 256,
             noise_stddev: 0.0, // zero noise for deterministic tests
         };
@@ -109,7 +108,7 @@ mod tests {
 
         // Dummy hint (not used in query)
         let hint_c = ClientHint {
-            data: vec![0u64; db_cols * n],
+            data: vec![0u32; db_cols * n],
             rows: db_cols,
             cols: n,
         };
@@ -132,21 +131,20 @@ mod tests {
         let n = 4;
         let params = LweParams {
             n,
-            q: 1u64 << 32,
             p: 256,
             noise_stddev: 0.0,
         };
 
         // Zero matrix A: makes A·s = 0, so query = 0 + 0 + Δ·u_col = Δ·u_col
         let a = LweMatrix {
-            data: vec![0u64; db_cols * n],
+            data: vec![0u32; db_cols * n],
             rows: db_cols,
             cols: n,
         };
 
         // Dummy hint (not used in query)
         let hint_c = ClientHint {
-            data: vec![0u64; db_cols * n],
+            data: vec![0u32; db_cols * n],
             rows: db_cols,
             cols: n,
         };
@@ -240,7 +238,6 @@ mod tests {
 
         let params = LweParams {
             n,
-            q: 1u64 << 32,
             p: 256,
             noise_stddev: 0.0,
         };
@@ -248,7 +245,7 @@ mod tests {
 
         // Zero hint means hint_c[row,:] · s = 0
         let hint_c = ClientHint {
-            data: vec![0u64; 4 * n], // 4 rows (2 groups × 2 bytes)
+            data: vec![0u32; 4 * n], // 4 rows (2 groups × 2 bytes)
             rows: 4,
             cols: n,
         };
@@ -289,7 +286,6 @@ mod tests {
 
         let params = LweParams {
             n,
-            q: 1u64 << 32,
             p: 256,
             noise_stddev: 0.0,
         };
@@ -319,12 +315,12 @@ mod tests {
 
         // secret = [10, 20]
         // hint_c[0,:] · s = 1*10 + 2*20 = 50
-        let secret = vec![10u64, 20];
+        let secret = vec![10u32, 20];
         let hint_dot = 1 * 10 + 2 * 20; // = 50
 
         // For plaintext = 77:
         // answer[0] = 77*Δ + hint_dot (so after subtracting hint_dot, we get 77*Δ)
-        let plaintext = 77u64;
+        let plaintext = 77u32;
         let answer = Answer(vec![
             (plaintext * delta).wrapping_add(hint_dot),
             0, // unused
@@ -348,14 +344,13 @@ mod tests {
 
         let params = LweParams {
             n,
-            q: 1u64 << 32,
             p: 256,
             noise_stddev: 0.0,
         };
         let delta = params.delta();
 
         let hint_c = ClientHint {
-            data: vec![0u64; 4 * n], // 4 rows
+            data: vec![0u32; 4 * n], // 4 rows
             rows: 4,
             cols: n,
         };
@@ -397,7 +392,6 @@ mod tests {
         // Verify client correctly regenerates A from seed
         let params = LweParams {
             n: 4,
-            q: 1u64 << 32,
             p: 256,
             noise_stddev: 0.0,
         };
@@ -409,7 +403,7 @@ mod tests {
         let msg = SetupMessage {
             matrix_seed: seed,
             hint_c: ClientHint {
-                data: vec![0u64; db_rows * params.n],
+                data: vec![0u32; db_rows * params.n],
                 rows: db_rows,
                 cols: params.n,
             },

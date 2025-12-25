@@ -1,6 +1,6 @@
 #[derive(Clone)]
 pub struct MatrixDatabase {
-    pub data: Vec<u64>,
+    pub data: Vec<u32>,
     pub rows: usize,
     pub cols: usize,
     /// Bytes per record
@@ -46,7 +46,7 @@ impl MatrixDatabase {
         let cols = records_per_group;
         let rows = record_size * num_groups;
 
-        let mut data = vec![0u64; rows * cols];
+        let mut data = vec![0u32; rows * cols];
 
         for (rec_idx, record) in records.iter().enumerate() {
             let group = rec_idx / records_per_group;
@@ -54,7 +54,7 @@ impl MatrixDatabase {
 
             for (byte_idx, &byte) in record.iter().take(record_size).enumerate() {
                 let row = group * record_size + byte_idx;
-                data[row * cols + col] = byte as u64;
+                data[row * cols + col] = byte as u32;
             }
         }
 
@@ -78,18 +78,18 @@ impl MatrixDatabase {
     }
 
     /// Extract a full record from the answer column
-    pub fn extract_record(&self, answer: &[u64], record_idx: usize) -> Vec<u64> {
+    pub fn extract_record(&self, answer: &[u32], record_idx: usize) -> Vec<u32> {
         assert!(record_idx < self.num_records, "Record index out of bounds");
         let (row_start, _) = self.record_to_coords(record_idx);
         answer[row_start..row_start + self.record_size].to_vec()
     }
 
     /// Matrix-vector multiply
-    pub fn multiply_vec(&self, query: &[u64]) -> Vec<u64> {
+    pub fn multiply_vec(&self, query: &[u32]) -> Vec<u32> {
         assert_eq!(query.len(), self.cols, "Query length must match columns");
-        let mut result = vec![0u64; self.rows];
+        let mut result = vec![0u32; self.rows];
         for row in 0..self.rows {
-            let mut sum = 0u64;
+            let mut sum = 0u32;
             for col in 0..self.cols {
                 sum = sum.wrapping_add(self.data[row * self.cols + col].wrapping_mul(query[col]));
             }
@@ -234,17 +234,17 @@ mod tests {
         // row 5:   13     15     17     (byte 1 of R6, R7, R8)
 
         // Select column 0 with unit vector [1, 0, 0]
-        let query_col0 = vec![1u64, 0, 0];
+        let query_col0 = vec![1u32, 0, 0];
         let result = db.multiply_vec(&query_col0);
         assert_eq!(result, vec![0, 1, 6, 7, 12, 13]);
 
         // Select column 1 with unit vector [0, 1, 0]
-        let query_col1 = vec![0u64, 1, 0];
+        let query_col1 = vec![0u32, 1, 0];
         let result = db.multiply_vec(&query_col1);
         assert_eq!(result, vec![2, 3, 8, 9, 14, 15]);
 
         // Select column 2 with unit vector [0, 0, 1]
-        let query_col2 = vec![0u64, 0, 1];
+        let query_col2 = vec![0u32, 0, 1];
         let result = db.multiply_vec(&query_col2);
         assert_eq!(result, vec![4, 5, 10, 11, 16, 17]);
     }
@@ -255,7 +255,7 @@ mod tests {
         let record_refs: Vec<&[u8]> = records.iter().map(|r| r.as_slice()).collect();
         let db = MatrixDatabase::new(&record_refs, 1);
 
-        let zero_query = vec![0u64; db.cols];
+        let zero_query = vec![0u32; db.cols];
         let result = db.multiply_vec(&zero_query);
 
         assert!(result.iter().all(|&x| x == 0));
@@ -273,7 +273,7 @@ mod tests {
         //   1     2      → row sum = 3
         //   3     4      → row sum = 7
 
-        let ones = vec![1u64; db.cols];
+        let ones = vec![1u32; db.cols];
         let result = db.multiply_vec(&ones);
 
         assert_eq!(result, vec![3, 7]);
@@ -291,12 +291,12 @@ mod tests {
         //   30    40
 
         // Select col 0, scaled by 3
-        let query = vec![3u64, 0];
+        let query = vec![3u32, 0];
         let result = db.multiply_vec(&query);
         assert_eq!(result, vec![30, 90]); // [10*3, 30*3]
 
         // Select col 1, scaled by 2
-        let query = vec![0u64, 2];
+        let query = vec![0u32, 2];
         let result = db.multiply_vec(&query);
         assert_eq!(result, vec![40, 80]); // [20*2, 40*2]
     }
@@ -309,12 +309,12 @@ mod tests {
         let db = MatrixDatabase::new(&record_refs, 1);
 
         // Large multiplier that would overflow without wrapping
-        let large = u64::MAX / 2;
+        let large = u32::MAX / 2;
         let query = vec![large, 0];
         let result = db.multiply_vec(&query);
 
-        // Should wrap correctly: 255 * (u64::MAX/2)
-        let expected = 255u64.wrapping_mul(large);
+        // Should wrap correctly: 255 * (u32::MAX/2)
+        let expected = 255u32.wrapping_mul(large);
         assert_eq!(result[0], expected);
     }
 
@@ -324,7 +324,7 @@ mod tests {
         let record_refs: Vec<&[u8]> = records.iter().map(|r| r.as_slice()).collect();
         let db = MatrixDatabase::new(&record_refs, 2);
 
-        let query = vec![1u64; db.cols];
+        let query = vec![1u32; db.cols];
         let result = db.multiply_vec(&query);
 
         // Result should have `rows` elements
@@ -339,7 +339,7 @@ mod tests {
         let db = MatrixDatabase::new(&record_refs, 1);
 
         // Wrong size query should panic
-        let bad_query = vec![1u64; db.cols + 1];
+        let bad_query = vec![1u32; db.cols + 1];
         db.multiply_vec(&bad_query);
     }
 }

@@ -7,25 +7,25 @@ use rand::distr::StandardUniform;
 // ============================================================================
 
 /// Compute dot product: a·s mod q (wrapping arithmetic)
-pub fn dot_product(a: &[u64], s: &[u64]) -> u64 {
+pub fn dot_product(a: &[u32], s: &[u32]) -> u32 {
     a.iter()
         .zip(s.iter())
         .map(|(&ai, &si)| ai.wrapping_mul(si))
-        .fold(0u64, |acc, x| acc.wrapping_add(x))
+        .fold(0u32, |acc, x| acc.wrapping_add(x))
 }
 
 /// Round and decode: converts noisy value to plaintext
 /// noisy = e + Δ·μ → μ
-pub fn round_decode(noisy: u64, params: &LweParams) -> u64 {
+pub fn round_decode(noisy: u32, params: &LweParams) -> u32 {
     let delta = params.delta();
     let half_delta = delta / 2;
     (noisy.wrapping_add(half_delta) / delta) % params.p
 }
 
 /// Sample noise from uniform distribution scaled by stddev
-pub fn sample_noise(stddev: f64, rng: &mut impl Rng) -> u64 {
+pub fn sample_noise(stddev: f64, rng: &mut impl Rng) -> u32 {
     let noise: f64 = rng.sample(StandardUniform);
-    (noise * stddev) as u64
+    (noise * stddev) as u32
 }
 
 // ============================================================================
@@ -34,17 +34,17 @@ pub fn sample_noise(stddev: f64, rng: &mut impl Rng) -> u64 {
 
 /// Secret key
 pub struct SecretKey<'a> {
-    pub s: &'a [u64],
+    pub s: &'a [u32],
 }
 
 /// Ciphertext
 pub struct Ciphertext<'a> {
-    pub a: &'a [u64],
-    pub c: u64,
+    pub a: &'a [u32],
+    pub c: u32,
 }
 
 /// Decrypt a ciphertext using the secret key
-pub fn decrypt(params: &LweParams, sk: &SecretKey, ct: &Ciphertext) -> u64 {
+pub fn decrypt(params: &LweParams, sk: &SecretKey, ct: &Ciphertext) -> u32 {
     let noisy = ct.c.wrapping_sub(dot_product(ct.a, sk.s));
     round_decode(noisy, params)
 }
@@ -55,7 +55,7 @@ pub fn decrypt(params: &LweParams, sk: &SecretKey, ct: &Ciphertext) -> u64 {
 
 /// Secret key (owned) - returned by keygen
 pub struct SecretKeyOwned {
-    pub s: Vec<u64>,
+    pub s: Vec<u32>,
 }
 
 impl SecretKeyOwned {
@@ -67,8 +67,8 @@ impl SecretKeyOwned {
 
 /// Ciphertext (owned) - returned by encrypt
 pub struct CiphertextOwned {
-    pub a: Vec<u64>,
-    pub c: u64,
+    pub a: Vec<u32>,
+    pub c: u32,
 }
 
 impl CiphertextOwned {
@@ -83,18 +83,16 @@ impl CiphertextOwned {
 
 /// Generates a random secret key
 pub fn keygen(params: &LweParams, rng: &mut impl Rng) -> SecretKeyOwned {
-    let s: Vec<u64> = (0..params.n)
-        .map(|_| rng.random_range(0..params.q))
-        .collect();
+    let s: Vec<u32> = (0..params.n).map(|_| rng.random()).collect();
     SecretKeyOwned { s }
 }
 
 /// Encrypt a message using the secret key
 pub fn encrypt(
     params: &LweParams,
-    a: &[u64],
+    a: &[u32],
     sk: &SecretKey,
-    msg: u64,
+    msg: u32,
     rng: &mut impl Rng,
 ) -> CiphertextOwned {
     let e = sample_noise(params.noise_stddev, rng);
@@ -102,7 +100,7 @@ pub fn encrypt(
     // c = aᵀs + e + Δμ mod q
     let c = dot_product(&a, sk.s)
         .wrapping_add(e)
-        .wrapping_add(params.delta() * msg);
+        .wrapping_add(params.delta().wrapping_mul(msg));
 
     CiphertextOwned { a: a.to_vec(), c }
 }
@@ -131,9 +129,7 @@ mod tests {
         let sk = keygen(&params, &mut rng);
         let msg = 123;
 
-        let a: Vec<u64> = (0..params.n)
-            .map(|_| rng.random_range(0..params.q))
-            .collect();
+        let a: Vec<u32> = (0..params.n).map(|_| rng.random()).collect();
 
         let ct = encrypt(&params, &a, &sk.as_ref(), msg, &mut rng);
         let dec = decrypt(&params, &sk.as_ref(), &ct.as_ref());
@@ -147,15 +143,11 @@ mod tests {
         let sk = keygen(&params, &mut rng);
         let msg = 123;
 
-        let a1: Vec<u64> = (0..params.n)
-            .map(|_| rng.random_range(0..params.q))
-            .collect();
+        let a1: Vec<u32> = (0..params.n).map(|_| rng.random()).collect();
 
         let ct1 = encrypt(&params, &a1, &sk.as_ref(), msg, &mut rng);
 
-        let a2: Vec<u64> = (0..params.n)
-            .map(|_| rng.random_range(0..params.q))
-            .collect();
+        let a2: Vec<u32> = (0..params.n).map(|_| rng.random()).collect();
 
         let ct2 = encrypt(&params, &a2, &sk.as_ref(), msg, &mut rng);
 

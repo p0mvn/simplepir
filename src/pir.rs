@@ -10,14 +10,14 @@ pub type MatrixSeed = [u8; 32];
 /// Can be generated deterministically from a seed using ChaCha20 PRG
 #[derive(Clone)]
 pub struct LweMatrix {
-    pub data: Vec<u64>, // row-major: A[i][j] = data[i * cols + j]
+    pub data: Vec<u32>, // row-major: A[i][j] = data[i * cols + j]
     pub rows: usize,    // √N (db.cols)
     pub cols: usize,    // n (LWE dimension)
 }
 
 /// Client hint: preprocessed db · A
 pub struct ClientHint {
-    pub data: Vec<u64>, // row-major: hint_c[i][j]
+    pub data: Vec<u32>, // row-major: hint_c[i][j]
     pub rows: usize,    // db.rows
     pub cols: usize,    // n
 }
@@ -25,8 +25,8 @@ pub struct ClientHint {
 impl LweMatrix {
     /// Generate random A matrix (legacy method, generates fresh randomness)
     pub fn random(rows: usize, cols: usize, rng: &mut impl Rng) -> Self {
-        let data: Vec<u64> = (0..rows * cols)
-            .map(|_| rng.random()) // uniform in ℤ_q (q = 2^64 with wrapping)
+        let data: Vec<u32> = (0..rows * cols)
+            .map(|_| rng.random()) // uniform in ℤ_q (q = 2^32 with wrapping)
             .collect();
         Self { data, rows, cols }
     }
@@ -36,8 +36,8 @@ impl LweMatrix {
     /// eliminating the need to store/transmit the full matrix
     pub fn from_seed(seed: &MatrixSeed, rows: usize, cols: usize) -> Self {
         let mut rng = ChaCha20Rng::from_seed(*seed);
-        let data: Vec<u64> = (0..rows * cols)
-            .map(|_| rng.random()) // uniform in ℤ_q (q = 2^64 with wrapping)
+        let data: Vec<u32> = (0..rows * cols)
+            .map(|_| rng.random()) // uniform in ℤ_q (q = 2^32 with wrapping)
             .collect();
         Self { data, rows, cols }
     }
@@ -51,13 +51,13 @@ impl LweMatrix {
 
     /// Get element A[row, col]
     #[inline]
-    pub fn get(&self, row: usize, col: usize) -> u64 {
+    pub fn get(&self, row: usize, col: usize) -> u32 {
         self.data[row * self.cols + col]
     }
 
     /// Get row slice A[row, :]
     #[inline]
-    pub fn row(&self, row: usize) -> &[u64] {
+    pub fn row(&self, row: usize) -> &[u32] {
         let start = row * self.cols;
         &self.data[start..start + self.cols]
     }
@@ -66,7 +66,7 @@ impl LweMatrix {
 impl ClientHint {
     /// Get row slice hint_c[row, :]
     #[inline]
-    pub fn row(&self, row: usize) -> &[u64] {
+    pub fn row(&self, row: usize) -> &[u32] {
         let start = row * self.cols;
         &self.data[start..start + self.cols]
     }
@@ -89,7 +89,7 @@ pub struct SetupMessage {
 }
 
 /// Client's query (sent to server)
-pub struct Query(pub Vec<u64>); // √N elements
+pub struct Query(pub Vec<u32>); // √N elements
 
 /// Server's answer (sent to client)
-pub struct Answer(pub Vec<u64>); // db.rows elements
+pub struct Answer(pub Vec<u32>); // db.rows elements
