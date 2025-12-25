@@ -123,7 +123,11 @@ mod tests {
         let (state, query) = client.query(0, &mut rng);
 
         assert_eq!(query.0.len(), 4, "Query should have db_cols elements");
-        assert_eq!(state.secret.len(), client.params.n, "Secret should have n elements");
+        assert_eq!(
+            state.secret.len(),
+            client.params.n,
+            "Secret should have n elements"
+        );
     }
 
     #[test]
@@ -155,7 +159,10 @@ mod tests {
 
             for i in 0..5 {
                 if i == col {
-                    assert_eq!(query.0[i], delta, "Position {i} should be Δ for record {col}");
+                    assert_eq!(
+                        query.0[i], delta,
+                        "Position {i} should be Δ for record {col}"
+                    );
                 } else {
                     assert_eq!(query.0[i], 0, "Position {i} should be 0 for record {col}");
                 }
@@ -172,6 +179,9 @@ mod tests {
         let (state2, _) = client.query(0, &mut rng);
 
         // Secrets should be different (with overwhelming probability)
-        assert_ne!(state1.secret, state2.secret, "Each query should have a fresh secret");
+        assert_ne!(
+            state1.secret, state2.secret,
+            "Each query should have a fresh secret"
+        );
     }
 }
