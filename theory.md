@@ -1,6 +1,51 @@
 # PIR Theory
 
-## Simple PIR
+## The Fundamental PIR Bottleneck
+
+**The unavoidable cost:** In any PIR scheme, the server *must touch every bit of the database* to answer even a single query. Why? If the server only looked at some records, it would learn that the client is *not* interested in the records it didn't look at. This is information-theoretic—no cryptographic cleverness can avoid it.
+
+This leads to a crucial insight: **the absolute maximum PIR throughput is limited by memory bandwidth**.
+
+```
+Throughput = Database Size / Server Time per Query
+
+If reading N bytes from memory takes T seconds, you cannot answer 
+queries faster than 1/T per second, regardless of cryptography.
+```
+
+On modern hardware, memory bandwidth is roughly **12 GB/s/core**. This is the theoretical ceiling for any PIR scheme.
+
+### Why Prior Schemes Were Slow
+
+Prior single-server PIR schemes achieved only ~259 MB/s/core (2% of memory bandwidth). The problem: **compute-bound cryptographic operations**.
+
+```
+Prior Scheme Timeline (per query):
+
+Memory Read:  ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+              (data available quickly)
+
+CPU Compute:  ████████████████████████████████████████████████████
+              (expensive crypto per byte - THIS IS THE BOTTLENECK)
+
+Result: CPU-bound, memory sitting idle
+```
+
+SimplePIR restructures computation so the server does **< 1 multiply + 1 add per database byte**:
+
+```
+SimplePIR Timeline (per query):
+
+Memory Read:  ████████████████████████████████████████████████████
+              (THIS becomes the bottleneck - which is optimal!)
+
+CPU Compute:  ████████████████████████████████████████████████░░░░
+              (cheap 32-bit ops, keeps up with memory)
+
+Result: Memory-bound, achieving 10 GB/s/core (81% of theoretical limit)
+```
+
+## Expansion Factor
 
 The expansion factor (F) is a measure of how much larger a ciphertext becomes compared to the original plaintext when you encrypt data.
 Breaking it down:
@@ -8,6 +53,68 @@ Breaking it down:
 - Ciphertext: ℓ · F bits (the encrypted result)
 
 So if F = 2, your encrypted data is twice as large as the original. If F = 10, it's ten times larger.
+
+### Expansion Factor in PIR History
+
+| Era | Scheme | Expansion F | Server Work/bit | Trade-off |
+|-----|--------|-------------|-----------------|-----------|
+| 1997 | Damgård-Jurik | F ≈ 1+ε | poly(λ) | Great comm, terrible compute |
+| 2010s | Ring-LWE (XPIR, SealPIR) | F ≈ 10 | polylog(λ) | Complex polynomial/FFT ops |
+| 2022 | SimplePIR (Plain LWE) | F ≈ 1024 | **O(1)** | Large hint, trivial online work |
+
+The counterintuitive insight: SimplePIR uses a **huge** expansion factor (F=1024) but achieves the fastest throughput by moving expensive work offline.
+
+## The Kushilevitz-Ostrovsky Framework (1997)
+
+The foundational single-server PIR construction that SimplePIR builds upon:
+
+```
+Database D as √N × √N matrix
+
+To fetch record at (row i, col j):
+1. Client sends E(q) — encrypted unit vector with "1" at position j
+2. Server computes D · E(q) = E(D · q)  — works because encryption is linearly homomorphic
+3. Client decrypts to get column j of D
+
+Communication: O(N^(1/d) · F^(d-1))  where d = dimension parameter
+Server operations: O(N · F^(d-1)) homomorphic ops
+```
+
+**The tension:** Lower expansion factor F → better communication, but often more expensive per-operation cost.
+
+### Why Ring-LWE Schemes Are Slow
+
+Schemes like SealPIR use Ring-LWE with polynomial rings. Each "multiplication" is:
+
+```
+Polynomial multiplication in ℤ_q[x]/(x^n + 1)
+
+Where:
+- n = 2048 or 4096 (polynomial degree)
+- q = huge modulus (60+ bits, multiple limbs)
+
+Cost per "element": O(n log n) operations via NTT (Number Theoretic Transform)
+```
+
+This is **vastly more expensive** than SimplePIR's plain 32-bit multiply-add!
+
+Additionally, Ring-LWE schemes often require:
+- Per-client "key-switching hints" (megabytes of state)
+- Ciphertext compression/expansion overhead
+- Complex polynomial arithmetic and FFTs
+
+### SimplePIR's Approach: Plain LWE
+
+SimplePIR uses standard LWE (not Ring-LWE) with F ≈ 1024. Naïvely disastrous, but:
+
+> "The server can do the bulk of its work **in advance**, and reuse it over multiple clients."
+
+| Aspect | Ring-LWE Schemes | SimplePIR (Plain LWE) |
+|--------|-----------------|----------------------|
+| Implementation | Polynomial arithmetic, FFTs | Simple integer ops |
+| Per-client state | Key-switching hints (MBs) | **None** |
+| Homomorphism needed | Fully homomorphic | **Only linear** → smaller params |
+| Throughput | Up to 259 MB/s | **10 GB/s** |
 
 ## LWE
 
@@ -419,6 +526,44 @@ Server compute:    2N ops                    ← linear (optimal)
 Hint size:         n·√N                      ← sublinear
 ```
 
+### Why SimplePIR Is Fast: Hardware Reality
+
+The magic isn't just algorithmic—it's about what modern CPUs are good at:
+
+```rust
+// SimplePIR server computation (essentially)
+fn answer_query(database: &[u32], query: &[u32], rows: usize, cols: usize) -> Vec<u32> {
+    let mut result = vec![0u32; rows];
+    for i in 0..rows {
+        for j in 0..cols {
+            result[i] = result[i].wrapping_add(
+                database[i * cols + j].wrapping_mul(query[j])
+            );
+        }
+    }
+    result
+}
+```
+
+This compiles to:
+1. **Tight SIMD loops** — CPU can process 8+ elements in parallel
+2. **Sequential memory access** — perfect cache utilization
+3. **No branching** — CPU pipeline never stalls
+4. **32-bit arithmetic** — native CPU word size, no multi-precision
+
+Compare to Ring-LWE schemes that need polynomial FFTs, large modular arithmetic, and complex data dependencies.
+
+### Performance Comparison Summary
+
+| Scheme | Throughput | % of Memory BW | Hint | Per-Query |
+|--------|-----------|----------------|------|-----------|
+| Prior single-server (Spiral) | 259 MB/s | 2% | ~0 | polylog(N) |
+| **SimplePIR** | **10 GB/s** | **81%** | O(√N) | 242 KB |
+| **DoublePIR** | 7.4 GB/s | 60% | O(1) ~16MB | 345 KB |
+| Multi-server (2 servers) | 11.5 GB/s | 93% | — | — |
+
+SimplePIR achieves **40× speedup** over prior single-server PIR, approaching multi-server performance with a simple ~1,600 line implementation.
+
 ### Simple PIR Technical Ideals
 
 Builds on a classic PIR approach:
@@ -490,17 +635,96 @@ Security & Correctness
 
 **Batch PIR:** To fetch k records efficiently, partition the database into k chunks. If desired records fall into different chunks, server work stays at N (not k·N). Collisions handled via redundant queries or best-effort recovery.
 
+## DoublePIR: Compressing the Hint
+
+SimplePIR's main drawback is the hint size: O(√N), which is ~121 MB for a 1 GB database. DoublePIR addresses this.
+
+### Key Observation
+
+From the original Kushilevitz-Ostrovsky paper: the client downloads:
+- The full hint H (√N × n matrix)
+- A √N-dimensional encrypted vector
+
+But the client only **needs one small part** of each to recover their record!
+
+### DoublePIR Approach
+
+Use SimplePIR recursively to fetch just the needed parts:
+
+```
+SimplePIR:   Client downloads full hint H         → O(√N) communication
+
+DoublePIR:   Client uses SimplePIR to PIR         → O(1) hint size (~16 MB)
+             into the hint itself!                   (independent of N!)
+```
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ LAYER 1: SimplePIR on the database                                  │
+│   - Database D arranged as √N × √N matrix                           │
+│   - Query selects a column → returns encrypted column               │
+│   - Client needs hint row i_row to decrypt                          │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ LAYER 2: SimplePIR on the hint                                      │
+│   - Treat hint H (√N × n) as a second database                      │
+│   - Client PIRs into H to fetch row i_row                           │
+│   - This hint-of-hint is O(1) size!                                 │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Non-Black-Box Optimization
+
+A naïve recursive application would be expensive. DoublePIR makes **non-black-box use** of SimplePIR's structure:
+
+- Exploits that the hint has special structure (it's D·A, not arbitrary data)
+- Saves a factor of n ≈ 1024 (the lattice dimension) over naïve design
+- Combines the two PIR layers efficiently
+
+### Cost Comparison
+
+| Metric | SimplePIR | DoublePIR |
+|--------|-----------|-----------|
+| Hint size (1GB DB) | 121 MB | **16 MB** |
+| Per-query upload | 14 KB | 14 KB |
+| Per-query download | 242 KB | 345 KB |
+| Server throughput | 10 GB/s/core | 7.4 GB/s/core |
+
+DoublePIR trades slightly higher per-query communication for a **dramatically smaller hint** that's independent of database size.
+
+### When to Use Which
+
+- **SimplePIR:** Client makes many queries, can amortize large hint download
+- **DoublePIR:** Client makes few queries, or hint storage is constrained
+
 ## To Look Into
 
+### Core Papers
+- [SimplePIR paper](https://eprint.iacr.org/2022/949.pdf) - The source of this document
+- [SimplePIR implementation](https://github.com/ahenzinger/simplepir) - ~1,400 lines of Go + 200 lines of C
+- [FrodoPIR](https://eprint.iacr.org/2022/981.pdf) - Independent concurrent work, essentially identical to SimplePIR
+- Kushilevitz and Ostrovsky's "square-root" PIR template (1997) - Foundation of SimplePIR
+
+### LWE Background
 - [Regular LWE](https://arxiv.org/pdf/2401.03703)
   - How does it differ from ring? Claimed to be much simpler
 - [Ring-LWE](https://eprint.iacr.org/2014/725.pdf)
-- [INSPIRE: IN-Storage Private Information REtrieval via Protocol
-and Architecture Co-design](https://dl.acm.org/doi/pdf/10.1145/3470496.3527433)
+  - More efficient but requires polynomial arithmetic/FFTs
+
+### Prior PIR Schemes (for comparison)
+- **SealPIR** - Ring-LWE + ciphertext compression, needs per-client key-switching hints
+- **Spiral** - Ring-LWE + FHE, achieves 259 MB/s, up to 1.3 GB/s with long records
+- **XPIR** - Ring-LWE with d=2, large absolute communication
+
+### Hardware & Optimizations
+- [INSPIRE: IN-Storage Private Information REtrieval](https://dl.acm.org/doi/pdf/10.1145/3470496.3527433)
   * SSD-based PIR
-- On minimizing the database updates / offline work:
-  - Dmitry Kogan and Henry Corrigan-Gibbs. Private blocklist lookups with Checklist. In USENIX Security, 2021.
-  - Yiping Ma, Ke Zhong, Tal Rabin, and Sebastian Angel. Incremental offline/online PIR. In USENIX Security, 2022.
-- Kushilevitz and Ostrovsky’s “square-root” PIR template. Base of Simple PIR.
+- Hardware acceleration (GPU/FPGA) is complementary to SimplePIR
 
-
+### Database Updates / Incremental PIR
+- Dmitry Kogan and Henry Corrigan-Gibbs. Private blocklist lookups with Checklist. USENIX Security, 2021.
+- Yiping Ma, Ke Zhong, Tal Rabin, and Sebastian Angel. Incremental offline/online PIR. USENIX Security, 2022.
