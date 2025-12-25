@@ -154,4 +154,41 @@ mod tests {
         assert_eq!(hint.cols, 3);
         assert_eq!(hint.data, vec![9, 12, 15, 19, 26, 33]);
     }
+
+    #[test]
+    fn test_answer_unit_vector_selects_column() {
+        // Database layout (4 records of 2 bytes each):
+        //        col0  col1
+        // row 0:  10    20    (byte 0 of records 0,1)
+        // row 1:  11    21    (byte 1 of records 0,1)
+        // row 2:  30    40    (byte 0 of records 2,3)
+        // row 3:  31    41    (byte 1 of records 2,3)
+        let records: Vec<Vec<u8>> = vec![
+            vec![10, 11], // record 0
+            vec![20, 21], // record 1
+            vec![30, 31], // record 2
+            vec![40, 41], // record 3
+        ];
+        let record_refs: Vec<&[u8]> = records.iter().map(|r| r.as_slice()).collect();
+        let db = MatrixDatabase::new(&record_refs, 2);
+
+        // Dummy A (not used by answer)
+        let a = LweMatrix {
+            data: vec![0; db.cols * 2],
+            rows: db.cols,
+            cols: 2,
+        };
+
+        let server = PirServer { db, a };
+
+        // Unit vector selecting column 1: [0, 1]
+        // NOTE: this query is in plaintext.
+        // Actual protocol obfuscates the query with encryption
+        // and multiplies the encrypted query with the database
+        let query = Query(vec![0, 1]);
+        let answer = server.answer(&query);
+
+        // Should return column 1: [20, 21, 40, 41]
+        assert_eq!(answer.0, vec![20, 21, 40, 41]);
+    }
 }
