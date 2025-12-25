@@ -1,6 +1,13 @@
 use rand::Rng;
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+
+/// 256-bit seed for PRG-based matrix generation
+/// Using ChaCha20 for portability, constant-time operation, and strong security
+pub type MatrixSeed = [u8; 32];
 
 /// LWE public matrix A (shared between client and server)
+/// Can be generated deterministically from a seed using ChaCha20 PRG
 #[derive(Clone)]
 pub struct LweMatrix {
     pub data: Vec<u64>, // row-major: A[i][j] = data[i * cols + j]
@@ -16,12 +23,30 @@ pub struct ClientHint {
 }
 
 impl LweMatrix {
-    /// Generate random A matrix
+    /// Generate random A matrix (legacy method, generates fresh randomness)
     pub fn random(rows: usize, cols: usize, rng: &mut impl Rng) -> Self {
         let data: Vec<u64> = (0..rows * cols)
             .map(|_| rng.random()) // uniform in ℤ_q (q = 2^64 with wrapping)
             .collect();
         Self { data, rows, cols }
+    }
+
+    /// Generate A matrix deterministically from a seed using ChaCha20 PRG
+    /// Both client and server can regenerate the same A from the seed,
+    /// eliminating the need to store/transmit the full matrix
+    pub fn from_seed(seed: &MatrixSeed, rows: usize, cols: usize) -> Self {
+        let mut rng = ChaCha20Rng::from_seed(*seed);
+        let data: Vec<u64> = (0..rows * cols)
+            .map(|_| rng.random()) // uniform in ℤ_q (q = 2^64 with wrapping)
+            .collect();
+        Self { data, rows, cols }
+    }
+
+    /// Generate a new random seed for matrix generation
+    pub fn generate_seed(rng: &mut impl Rng) -> MatrixSeed {
+        let mut seed = [0u8; 32];
+        rng.fill(&mut seed);
+        seed
     }
 
     /// Get element A[row, col]
@@ -52,12 +77,15 @@ impl ClientHint {
 // ============================================================================
 
 /// Sent from server to client during setup
+/// Uses a 32-byte seed instead of full matrix A to save bandwidth
+/// Client regenerates A locally from the seed using ChaCha20 PRG
 pub struct SetupMessage {
-    pub a: LweMatrix,
+    pub matrix_seed: MatrixSeed, // 32 bytes instead of full A matrix
     pub hint_c: ClientHint,
-    pub db_cols: usize,     // √N - needed for query generation
+    pub db_cols: usize,     // √N - needed for query generation (also rows of A)
     pub db_rows: usize,     // needed for answer interpretation
     pub record_size: usize, // bytes per record
+    pub lwe_dim: usize,     // n - LWE dimension (cols of A)
 }
 
 /// Client's query (sent to server)

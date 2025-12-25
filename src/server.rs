@@ -3,33 +3,42 @@ use rand::Rng;
 use crate::{
     matrix_database::MatrixDatabase,
     params::LweParams,
-    pir::{Answer, ClientHint, LweMatrix, Query},
+    pir::{Answer, ClientHint, LweMatrix, MatrixSeed, Query},
 };
 
 /// Server state
 pub struct PirServer {
     db: MatrixDatabase,
+    matrix_seed: MatrixSeed,
     a: LweMatrix,
+    lwe_dim: usize,
 }
 
 impl PirServer {
     /// Create a new server with the given database
-    /// Generates the public matrix A and computes hint_c = DB · A
+    /// Generates a seed and derives matrix A from it using ChaCha20 PRG
     pub fn new(db: MatrixDatabase, params: &LweParams, rng: &mut impl Rng) -> Self {
-        let a = LweMatrix::random(db.cols, params.n, rng);
-        Self { db, a }
+        let matrix_seed = LweMatrix::generate_seed(rng);
+        let a = LweMatrix::from_seed(&matrix_seed, db.cols, params.n);
+        Self {
+            db,
+            matrix_seed,
+            a,
+            lwe_dim: params.n,
+        }
     }
 
     /// Get the setup message to send to the client
-    /// Contains A and hint_c = DB · A
+    /// Contains seed (32 bytes) instead of full A matrix, plus hint_c = DB · A
     pub fn setup_message(&self) -> crate::pir::SetupMessage {
         let hint_c = self.compute_hint();
         crate::pir::SetupMessage {
-            a: self.a.clone(),
+            matrix_seed: self.matrix_seed,
             hint_c,
             db_cols: self.db.cols,
             db_rows: self.db.rows,
             record_size: self.db.record_size,
+            lwe_dim: self.lwe_dim,
         }
     }
 
@@ -71,6 +80,16 @@ mod tests {
     use super::*;
     use crate::matrix_database::MatrixDatabase;
 
+    /// Helper to create a server with a specific A matrix (for testing)
+    fn test_server_with_matrix(db: MatrixDatabase, a: LweMatrix) -> PirServer {
+        PirServer {
+            db,
+            matrix_seed: [0u8; 32], // dummy seed for tests
+            a,
+            lwe_dim: 2,
+        }
+    }
+
     #[test]
     fn test_compute_hint_small_matrix() {
         // Create a 2×2 database (4 records of 1 byte each)
@@ -94,7 +113,7 @@ mod tests {
             cols: 2,
         };
 
-        let server = PirServer { db, a };
+        let server = test_server_with_matrix(db, a);
 
         let hint = server.compute_hint();
 
@@ -121,7 +140,7 @@ mod tests {
             cols: 2,
         };
 
-        let server = PirServer { db, a };
+        let server = test_server_with_matrix(db, a);
 
         let hint = server.compute_hint();
 
@@ -147,7 +166,7 @@ mod tests {
             cols: 3,
         };
 
-        let server = PirServer { db, a };
+        let server = test_server_with_matrix(db, a);
 
         let hint = server.compute_hint();
 
@@ -183,7 +202,7 @@ mod tests {
             cols: 2,
         };
 
-        let server = PirServer { db, a };
+        let server = test_server_with_matrix(db, a);
 
         // Unit vector selecting column 1: [0, 1]
         // NOTE: this query is in plaintext.
@@ -194,5 +213,19 @@ mod tests {
 
         // Should return column 1: [20, 21, 40, 41]
         assert_eq!(answer.0, vec![20, 21, 40, 41]);
+    }
+
+    #[test]
+    fn test_seeded_matrix_generation() {
+        // Verify that the same seed produces the same matrix
+        let seed: MatrixSeed = [42u8; 32];
+        let a1 = LweMatrix::from_seed(&seed, 10, 8);
+        let a2 = LweMatrix::from_seed(&seed, 10, 8);
+        assert_eq!(a1.data, a2.data, "Same seed should produce identical matrix");
+
+        // Different seeds should produce different matrices
+        let seed2: MatrixSeed = [43u8; 32];
+        let a3 = LweMatrix::from_seed(&seed2, 10, 8);
+        assert_ne!(a1.data, a3.data, "Different seeds should produce different matrices");
     }
 }

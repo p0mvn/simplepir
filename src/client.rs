@@ -7,7 +7,7 @@ use rand::Rng;
 
 /// Client state (reusable across queries)
 pub struct PirClient {
-    a: LweMatrix,
+    a: LweMatrix, // Regenerated from seed, not stored/transmitted
     hint_c: ClientHint,
     params: LweParams,
     db_cols: usize,
@@ -23,9 +23,12 @@ pub struct QueryState {
 
 impl PirClient {
     /// Initialize client from setup message
+    /// Regenerates matrix A locally from the seed using ChaCha20 PRG
     pub fn new(msg: SetupMessage, params: LweParams) -> Self {
+        // Regenerate A from the seed - same PRG produces identical matrix
+        let a = LweMatrix::from_seed(&msg.matrix_seed, msg.db_cols, msg.lwe_dim);
         Self {
-            a: msg.a,
+            a,
             hint_c: msg.hint_c,
             params,
             db_cols: msg.db_cols,
@@ -88,9 +91,10 @@ impl PirClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pir::{ClientHint, LweMatrix, SetupMessage};
+    use crate::pir::{ClientHint, LweMatrix, MatrixSeed, SetupMessage};
 
-    /// Create a test client with zero matrix A (makes A·s = 0)
+    /// Create a test client with a seeded matrix A
+    /// For deterministic tests, we use a fixed seed
     fn test_client(db_cols: usize, record_size: usize) -> PirClient {
         let n = 4; // small LWE dimension for testing
         let params = LweParams {
@@ -98,6 +102,39 @@ mod tests {
             q: 1u64 << 32,
             p: 256,
             noise_stddev: 0.0, // zero noise for deterministic tests
+        };
+
+        // Use a fixed seed for deterministic tests
+        let matrix_seed: MatrixSeed = [0u8; 32];
+
+        // Dummy hint (not used in query)
+        let hint_c = ClientHint {
+            data: vec![0u64; db_cols * n],
+            rows: db_cols,
+            cols: n,
+        };
+
+        let msg = SetupMessage {
+            matrix_seed,
+            hint_c,
+            db_cols,
+            db_rows: db_cols * record_size,
+            record_size,
+            lwe_dim: n,
+        };
+
+        PirClient::new(msg, params)
+    }
+
+    /// Create a test client with zero matrix A (makes A·s = 0)
+    /// Uses a custom A matrix directly for specific test scenarios
+    fn test_client_with_zero_a(db_cols: usize, record_size: usize) -> PirClient {
+        let n = 4;
+        let params = LweParams {
+            n,
+            q: 1u64 << 32,
+            p: 256,
+            noise_stddev: 0.0,
         };
 
         // Zero matrix A: makes A·s = 0, so query = 0 + 0 + Δ·u_col = Δ·u_col
@@ -114,15 +151,14 @@ mod tests {
             cols: n,
         };
 
-        let msg = SetupMessage {
+        PirClient {
             a,
             hint_c,
+            params,
             db_cols,
             db_rows: db_cols * record_size,
             record_size,
-        };
-
-        PirClient::new(msg, params)
+        }
     }
 
     #[test]
@@ -143,7 +179,7 @@ mod tests {
     #[test]
     fn test_query_unit_vector_structure() {
         // With A = 0 and noise = 0, query should be exactly Δ·u_col
-        let client = test_client(4, 1);
+        let client = test_client_with_zero_a(4, 1);
         let mut rng = rand::rng();
         let delta = client.params.delta();
 
@@ -159,7 +195,7 @@ mod tests {
 
     #[test]
     fn test_query_selects_correct_column() {
-        let client = test_client(5, 1);
+        let client = test_client_with_zero_a(5, 1);
         let mut rng = rand::rng();
         let delta = client.params.delta();
 
@@ -217,19 +253,19 @@ mod tests {
             cols: n,
         };
 
-        let msg = SetupMessage {
+        // Build client directly for testing (bypass SetupMessage)
+        let client = PirClient {
             a: LweMatrix {
                 data: vec![0; db_cols * n],
                 rows: db_cols,
                 cols: n,
             },
             hint_c,
+            params,
             db_cols,
             db_rows: 4,
             record_size,
         };
-
-        let client = PirClient::new(msg, params);
 
         // Simulate answer for record in group 0: bytes [42, 99]
         // answer[0] = 42 * Δ, answer[1] = 99 * Δ
@@ -267,19 +303,19 @@ mod tests {
             cols: n,
         };
 
-        let msg = SetupMessage {
+        // Build client directly for testing (bypass SetupMessage)
+        let client = PirClient {
             a: LweMatrix {
                 data: vec![0; db_cols * n],
                 rows: db_cols,
                 cols: n,
             },
             hint_c,
+            params,
             db_cols,
             db_rows: 2,
             record_size,
         };
-
-        let client = PirClient::new(msg, params);
 
         // secret = [10, 20]
         // hint_c[0,:] · s = 1*10 + 2*20 = 50
@@ -324,19 +360,19 @@ mod tests {
             cols: n,
         };
 
-        let msg = SetupMessage {
+        // Build client directly for testing (bypass SetupMessage)
+        let client = PirClient {
             a: LweMatrix {
                 data: vec![0; db_cols * n],
                 rows: db_cols,
                 cols: n,
             },
             hint_c,
+            params,
             db_cols,
             db_rows: 4,
             record_size,
         };
-
-        let client = PirClient::new(msg, params);
 
         // Record in group 1 starts at row 2 (group * record_size = 1 * 2)
         // Bytes: [200, 201]
@@ -354,5 +390,39 @@ mod tests {
 
         let recovered = client.recover(&state, &answer);
         assert_eq!(recovered, vec![200, 201]);
+    }
+
+    #[test]
+    fn test_client_from_seed() {
+        // Verify client correctly regenerates A from seed
+        let params = LweParams {
+            n: 4,
+            q: 1u64 << 32,
+            p: 256,
+            noise_stddev: 0.0,
+        };
+
+        let seed: MatrixSeed = [42u8; 32];
+        let db_cols = 3;
+        let db_rows = 6;
+
+        let msg = SetupMessage {
+            matrix_seed: seed,
+            hint_c: ClientHint {
+                data: vec![0u64; db_rows * params.n],
+                rows: db_rows,
+                cols: params.n,
+            },
+            db_cols,
+            db_rows,
+            record_size: 2,
+            lwe_dim: params.n,
+        };
+
+        let client = PirClient::new(msg, params);
+
+        // Verify the regenerated A matches what we'd get from the seed directly
+        let expected_a = LweMatrix::from_seed(&seed, db_cols, params.n);
+        assert_eq!(client.a.data, expected_a.data);
     }
 }
