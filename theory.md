@@ -728,3 +728,5 @@ DoublePIR trades slightly higher per-query communication for a **dramatically sm
 ### Database Updates / Incremental PIR
 - Dmitry Kogan and Henry Corrigan-Gibbs. Private blocklist lookups with Checklist. USENIX Security, 2021.
 - Yiping Ma, Ke Zhong, Tal Rabin, and Sebastian Angel. Incremental offline/online PIR. USENIX Security, 2022.
+- [Checklist](https://eprint.iacr.org/2021/345)
+  - Splits db into stable and recent parts
