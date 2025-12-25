@@ -1,6 +1,6 @@
 use crate::params::LweParams;
 use rand::Rng;
-use rand::distr::StandardUniform;
+use rand_distr::{Distribution, Normal};
 
 // ============================================================================
 // Reusable primitives (used by both Regev and PIR)
@@ -22,10 +22,20 @@ pub fn round_decode(noisy: u32, params: &LweParams) -> u32 {
     (noisy.wrapping_add(half_delta) / delta) % params.p
 }
 
-/// Sample noise from uniform distribution scaled by stddev
+/// Sample noise from centered discrete Gaussian distribution.
+///
+/// LWE security requires noise centered at 0 with appropriate tail bounds.
+/// We sample from N(0, σ²), round to nearest integer, then cast to u32.
+/// Negative values wrap around mod 2³² which is correct for ℤ_q arithmetic.
 pub fn sample_noise(stddev: f64, rng: &mut impl Rng) -> u32 {
-    let noise: f64 = rng.sample(StandardUniform);
-    (noise * stddev) as u32
+    if stddev == 0.0 {
+        return 0;
+    }
+    let normal = Normal::new(0.0, stddev).expect("stddev must be finite and positive");
+    let sample: f64 = normal.sample(rng);
+    // Round to nearest integer, then cast to u32
+    // Negative values wrap correctly: -1 becomes u32::MAX (≡ -1 mod 2³²)
+    sample.round() as i64 as u32
 }
 
 // ============================================================================
