@@ -1,15 +1,6 @@
 use crate::params::LweParams;
-use rand::Rng;
 use rand::distr::StandardUniform;
-
-pub struct SecretKey {
-    pub s: Vec<u64>, // Secret vector in ℤ_q^n
-}
-
-pub struct Ciphertext {
-    pub a: Vec<u64>, // Random vector
-    pub c: u64,      // aᵀs + e + Δμ
-}
+use rand::Rng;
 
 // ============================================================================
 // Reusable primitives (used by both Regev and PIR)
@@ -41,16 +32,70 @@ pub fn sample_noise(stddev: f64, rng: &mut impl Rng) -> u64 {
 // Regev encryption scheme
 // ============================================================================
 
+/// Secret key
+pub struct SecretKey<'a> {
+    pub s: &'a [u64],
+}
+
+/// Ciphertext
+pub struct Ciphertext<'a> {
+    pub a: &'a [u64],
+    pub c: u64,
+}
+
+/// Decrypt a ciphertext using the secret key
+pub fn decrypt(params: &LweParams, sk: &SecretKey, ct: &Ciphertext) -> u64 {
+    let noisy = ct.c.wrapping_sub(dot_product(ct.a, sk.s));
+    round_decode(noisy, params)
+}
+
+// ============================================================================
+// Regev encryption scheme - owned types (for keygen/encrypt)
+// ============================================================================
+
+/// Secret key (owned) - returned by keygen
+pub struct SecretKeyOwned {
+    pub s: Vec<u64>,
+}
+
+impl SecretKeyOwned {
+    /// Borrow as SecretKey for use with decrypt
+    pub fn as_ref(&self) -> SecretKey<'_> {
+        SecretKey { s: &self.s }
+    }
+}
+
+/// Ciphertext (owned) - returned by encrypt
+pub struct CiphertextOwned {
+    pub a: Vec<u64>,
+    pub c: u64,
+}
+
+impl CiphertextOwned {
+    /// Borrow as Ciphertext for use with decrypt
+    pub fn as_ref(&self) -> Ciphertext<'_> {
+        Ciphertext {
+            a: &self.a,
+            c: self.c,
+        }
+    }
+}
+
 /// Generates a random secret key
-pub fn keygen(params: &LweParams, rng: &mut impl Rng) -> SecretKey {
+pub fn keygen(params: &LweParams, rng: &mut impl Rng) -> SecretKeyOwned {
     let s: Vec<u64> = (0..params.n)
         .map(|_| rng.random_range(0..params.q))
         .collect();
-    SecretKey { s }
+    SecretKeyOwned { s }
 }
 
 /// Encrypt a message using the secret key
-pub fn encrypt(params: &LweParams, sk: &SecretKey, msg: u64, rng: &mut impl Rng) -> Ciphertext {
+pub fn encrypt(
+    params: &LweParams,
+    sk: &SecretKey,
+    msg: u64,
+    rng: &mut impl Rng,
+) -> CiphertextOwned {
     let a: Vec<u64> = (0..params.n)
         .map(|_| rng.random_range(0..params.q))
         .collect();
@@ -58,22 +103,16 @@ pub fn encrypt(params: &LweParams, sk: &SecretKey, msg: u64, rng: &mut impl Rng)
     let e = sample_noise(params.noise_stddev, rng);
 
     // c = aᵀs + e + Δμ mod q
-    let c = dot_product(&a, &sk.s)
+    let c = dot_product(&a, sk.s)
         .wrapping_add(e)
         .wrapping_add(params.delta() * msg);
 
-    Ciphertext { a, c }
+    CiphertextOwned { a, c }
 }
 
-/// Decrypt a ciphertext using the secret key
-pub fn decrypt(params: &LweParams, sk: &SecretKey, ct: &Ciphertext) -> u64 {
-    let noisy = ct.c.wrapping_sub(dot_product(&ct.a, &sk.s));
-    round_decode(noisy, params)
-}
-
-// Add two ciphertexts homomorphically
-pub fn add_ciphertexts(ct1: &Ciphertext, ct2: &Ciphertext) -> Ciphertext {
-    Ciphertext {
+/// Add two ciphertexts homomorphically
+pub fn add_ciphertexts(ct1: &Ciphertext, ct2: &Ciphertext) -> CiphertextOwned {
+    CiphertextOwned {
         a: ct1
             .a
             .iter()
@@ -94,8 +133,8 @@ mod tests {
         let mut rng = rand::rng();
         let sk = keygen(&params, &mut rng);
         let msg = 123;
-        let ct = encrypt(&params, &sk, msg, &mut rng);
-        let dec = decrypt(&params, &sk, &ct);
+        let ct = encrypt(&params, &sk.as_ref(), msg, &mut rng);
+        let dec = decrypt(&params, &sk.as_ref(), &ct.as_ref());
         assert_eq!(dec, msg);
     }
 
@@ -105,14 +144,14 @@ mod tests {
         let mut rng = rand::rng();
         let sk = keygen(&params, &mut rng);
         let msg = 123;
-        let ct1 = encrypt(&params, &sk, msg, &mut rng);
-        let ct2 = encrypt(&params, &sk, msg, &mut rng);
+        let ct1 = encrypt(&params, &sk.as_ref(), msg, &mut rng);
+        let ct2 = encrypt(&params, &sk.as_ref(), msg, &mut rng);
 
         // Add the two ciphertexts homomorphically
-        let c_combined = add_ciphertexts(&ct1, &ct2);
+        let c_combined = add_ciphertexts(&ct1.as_ref(), &ct2.as_ref());
 
         // Decrypt the combined ciphertext
-        let dec = decrypt(&params, &sk, &c_combined);
+        let dec = decrypt(&params, &sk.as_ref(), &c_combined.as_ref());
 
         // Assert that the decrypted value is the sum of the two messages
         assert_eq!(dec, msg + msg);

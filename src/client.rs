@@ -1,7 +1,7 @@
 use crate::{
     params::LweParams,
     pir::{Answer, ClientHint, LweMatrix, Query, SetupMessage},
-    regev::{dot_product, round_decode, sample_noise},
+    regev::{decrypt, dot_product, sample_noise, Ciphertext, SecretKey},
 };
 use rand::Rng;
 
@@ -71,24 +71,23 @@ impl PirClient {
 
     /// Recover: decrypt the target record from the answer
     ///
-    /// d̂ = ans[row] - hint_c[row, :] · s
-    /// d = round(d̂ / Δ) mod p
+    /// Each byte is recovered by Regev-decrypting (hint_c[row,:], ans[row])
+    /// where hint_c[row,:] acts as 'a' and ans[row] acts as 'c'
     pub fn recover(&self, state: &QueryState, answer: &Answer) -> Vec<u8> {
-        let mut result = Vec::with_capacity(self.record_size);
+        let sk = SecretKey {
+            s: &state.secret,
+        };
 
-        for byte_idx in 0..self.record_size {
-            let row = state.row_start + byte_idx;
-
-            // d̂ = ans[row] - hint_c[row, :] · s
-            let hint_row = self.hint_c.row(row);
-            let noisy = answer.0[row].wrapping_sub(dot_product(hint_row, &state.secret));
-
-            // Round and decode to recover plaintext byte
-            let recovered = round_decode(noisy, &self.params);
-            result.push(recovered as u8);
-        }
-
-        result
+        (0..self.record_size)
+            .map(|byte_idx| {
+                let row = state.row_start + byte_idx;
+                let ct = Ciphertext {
+                    a: self.hint_c.row(row),
+                    c: answer.0[row],
+                };
+                decrypt(&self.params, &sk, &ct) as u8
+            })
+            .collect()
     }
 }
 
