@@ -710,6 +710,12 @@ The server appends a₁ᵀ to Hᵀ before the second PIR:
 
 One SimplePIR query on this matrix retrieves all n+1 values the client needs.
 
+### Communiction Trade-Off
+
+**Why DoublePIR's Communication Scales with Entry Size (Unlike SimplePIR)**
+
+In SimplePIR, the client downloads the entire hint matrix upfront, so per-query communication is essentially just the query vector plus the response—independent of entry size. In DoublePIR, the client avoids this large upfront cost by fetching hint information on-demand: after querying the actual database, the client makes a second PIR query over a hint database to retrieve the information needed to decode the response. Since the hint database is derived from the original database entries, larger entries produce larger hint rows, causing the second query's response to scale with entry size. When amortized over many queries, this per-query overhead accumulates, whereas SimplePIR's constant per-query cost remains fixed regardless of entry size.
+
 ### Base-p Decomposition
 
 SimplePIR operates on elements in ℤ_p, but H and a₁ contain elements in ℤ_q (where q ≫ p). The server decomposes each element into κ = ⌈log(q)/log(p)⌉ ≈ 4 base-p digits before the second-level PIR.
