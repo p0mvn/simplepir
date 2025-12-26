@@ -637,69 +637,96 @@ Security & Correctness
 
 ## DoublePIR: Compressing the Hint
 
-SimplePIR's main drawback is the hint size: O(√N), which is ~121 MB for a 1 GB database. DoublePIR addresses this.
+SimplePIR's main drawback is the hint size: O(n√N), which is ~121 MB for a 1 GB database. DoublePIR reduces this to O(n²) — approximately **16 MB independent of database size**.
 
 ### Key Observation
 
-From the original Kushilevitz-Ostrovsky paper: the client downloads:
-- The full hint H (√N × n matrix)
-- A √N-dimensional encrypted vector
+In SimplePIR, to decrypt element at (i_row, i_col), the client needs:
+1. **Row i_row** of hint matrix H = D·A (n elements)
+2. **Element i_row** of answer vector a (1 element)
 
-But the client only **needs one small part** of each to recover their record!
+The client downloads the *entire* hint H but only uses one row. What if we could fetch just that row privately?
 
-### DoublePIR Approach
+### The Transpose Trick
 
-Use SimplePIR recursively to fetch just the needed parts:
-
-```
-SimplePIR:   Client downloads full hint H         → O(√N) communication
-
-DoublePIR:   Client uses SimplePIR to PIR         → O(1) hint size (~16 MB)
-             into the hint itself!                   (independent of N!)
-```
-
-### How It Works
+SimplePIR can efficiently retrieve a **column** (not a row). Solution: transpose the hint matrix.
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│ LAYER 1: SimplePIR on the database                                  │
-│   - Database D arranged as √N × √N matrix                           │
-│   - Query selects a column → returns encrypted column               │
-│   - Client needs hint row i_row to decrypt                          │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ LAYER 2: SimplePIR on the hint                                      │
-│   - Treat hint H (√N × n) as a second database                      │
-│   - Client PIRs into H to fetch row i_row                           │
-│   - This hint-of-hint is O(1) size!                                 │
-└─────────────────────────────────────────────────────────────────────┘
+Hint H (√N × n)              Transposed Hᵀ (n × √N)
+┌─────────────────┐          ┌─────────────────────────┐
+│  row 0          │          │ col 0  col 1 ... col i_row ... │
+│  row 1          │    →     │   ↓      ↓        ↓            │
+│  ...            │          │                                │
+│  row i_row  ◄───│          └─────────────────────────┘
+│  ...            │                         ↑
+└─────────────────┘               Column i_row of Hᵀ = Row i_row of H
 ```
 
-### Non-Black-Box Optimization
+By transposing, **row i_row becomes column i_row**, which SimplePIR can fetch in one query.
 
-A naïve recursive application would be expensive. DoublePIR makes **non-black-box use** of SimplePIR's structure:
+### Protocol Overview
 
-- Exploits that the hint has special structure (it's D·A, not arbitrary data)
-- Saves a factor of n ≈ 1024 (the lattice dimension) over naïve design
-- Combines the two PIR layers efficiently
+**Offline Phase:**
+
+| Step | Who | What |
+|------|-----|------|
+| 1 | Server | Computes hint `H = D · A` |
+| 2 | Server | Transposes to get `Hᵀ` |
+| 3 | Server | Computes second-level hint `H₂ = Hᵀ · A₂` |
+| 4 | Client | Downloads only `H₂` (~16 MB, size n × n) |
+
+**Online Phase** (client wants element at i_row, i_col):
+
+| Step | Who | What |
+|------|-----|------|
+| 1 | Client | Generates `q₁` encoding column i_col |
+| 2 | Client | Generates `q₂` encoding row i_row |
+| 3 | Client | Sends both queries to server |
+| 4 | Server | Computes `a₁ = Dᵀ · q₁` (first-level answer) |
+| 5 | Server | Forms `[Hᵀ ∥ a₁ᵀ]` and computes `a₂ = [Hᵀ ∥ a₁ᵀ]ᵀ · q₂` |
+| 6 | Server | Sends `a₂` to client |
+| 7 | Client | Decrypts using H₂ to get row i_row of H + element i_row of a₁ |
+| 8 | Client | Uses those values to recover D[i_row, i_col] |
+
+### Why Concatenate the Answer Vector?
+
+The server appends a₁ᵀ to Hᵀ before the second PIR:
+
+```
+[Hᵀ ∥ a₁ᵀ]  (n+1 × √N matrix)
+┌─────────────────────────────────┐
+│ H[0,0]   H[1,0]   ... H[√N-1,0] │  ← row 0 of Hᵀ
+│ H[0,1]   H[1,1]   ... H[√N-1,1] │  ← row 1 of Hᵀ
+│ ...                             │
+│ H[0,n-1] H[1,n-1] ...           │  ← row n-1 of Hᵀ
+│ a₁[0]    a₁[1]    ... a₁[√N-1]  │  ← answer vector as final row
+└─────────────────────────────────┘
+        ↑
+   Column i_row contains:
+   - All n elements of row i_row of H
+   - Element i_row of a₁
+   = Everything needed for decryption!
+```
+
+One SimplePIR query on this matrix retrieves all n+1 values the client needs.
+
+### Base-p Decomposition
+
+SimplePIR operates on elements in ℤ_p, but H and a₁ contain elements in ℤ_q (where q ≫ p). The server decomposes each element into κ = ⌈log(q)/log(p)⌉ ≈ 4 base-p digits before the second-level PIR.
 
 ### Cost Comparison
 
 | Metric | SimplePIR | DoublePIR |
 |--------|-----------|-----------|
-| Hint size (1GB DB) | 121 MB | **16 MB** |
-| Per-query upload | 14 KB | 14 KB |
-| Per-query download | 242 KB | 345 KB |
-| Server throughput | 10 GB/s/core | 7.4 GB/s/core |
-
-DoublePIR trades slightly higher per-query communication for a **dramatically smaller hint** that's independent of database size.
+| Hint size | O(n√N) ~121 MB | **O(n²) ~16 MB** |
+| Per-query upload | √N elements | 2√N elements |
+| Per-query download | √N elements | (2n+1)·κ elements |
+| Server throughput | 10 GB/s | 7.4 GB/s |
 
 ### When to Use Which
 
-- **SimplePIR:** Client makes many queries, can amortize large hint download
-- **DoublePIR:** Client makes few queries, or hint storage is constrained
+- **SimplePIR:** Client makes many queries (amortize large hint) or hint storage is cheap
+- **DoublePIR:** Large databases (N ≫ n² ≈ 2²⁰), limited client storage, or few queries
 
 ## To Look Into
 
