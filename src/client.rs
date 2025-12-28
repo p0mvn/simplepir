@@ -60,7 +60,6 @@ impl PirClient {
                     msg,
                     rng,
                 )
-                
             })
             .collect();
 

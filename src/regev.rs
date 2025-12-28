@@ -98,13 +98,7 @@ pub fn keygen(params: &LweParams, rng: &mut impl Rng) -> SecretKeyOwned {
 }
 
 /// Encrypt a message using the secret key
-pub fn encrypt(
-    params: &LweParams,
-    a: &[u32],
-    sk: &SecretKey,
-    msg: u32,
-    rng: &mut impl Rng,
-) -> u32 {
+pub fn encrypt(params: &LweParams, a: &[u32], sk: &SecretKey, msg: u32, rng: &mut impl Rng) -> u32 {
     let e = sample_noise(params.noise_stddev, rng);
 
     // c = aᵀs + e + Δμ mod q
@@ -160,7 +154,10 @@ mod tests {
         let ct2 = encrypt(&params, &a2, &sk.as_ref(), msg, &mut rng);
 
         // Add the two ciphertexts homomorphically
-        let c_combined = add_ciphertexts(&Ciphertext { a: &a1, c: ct1 }, &Ciphertext { a: &a2, c: ct2 });
+        let c_combined = add_ciphertexts(
+            &Ciphertext { a: &a1, c: ct1 },
+            &Ciphertext { a: &a2, c: ct2 },
+        );
 
         // Decrypt the combined ciphertext
         let dec = decrypt(&params, &sk.as_ref(), &c_combined.as_ref());
