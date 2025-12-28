@@ -4,4 +4,5 @@ pub mod params;
 pub mod pir;
 pub mod regev;
 pub mod ring;
+pub mod ring_regev;
 pub mod server;

@@ -183,3 +183,57 @@ Encrypt(μ): (a, aᵀs + e + ⌊q/p⌋ · μ)
 Decrypt(a,c): round((c - aᵀs) / ⌊q/p⌋)
 Add ciphertexts: (a₁ + a₂, c₁ + c₂) -> decrypts to μ₁ + μ₂
 
+## Ring-LWE
+
+Ring-LWE (Ring Learning With Errors) is a structured variant of LWE that offers significant efficiency improvements while maintaining strong security guarantees.
+
+In standard LWE, we work with:
+- A random matrix A ∈ ℤ_q^{n x m}
+- A secret vector s ∈ ℤ_q^n
+- A small error vector e ∈ ℤ_q^n
+
+The LWE problem is to distinguish (A, A*s + e) from uniform randomness.
+
+Key characteristics:
+- Matrix A has no special structure
+- Storage O(n*m) elements
+- Computation O(n*m) operations for matrix-vector multiplication
+
+### Ring-LWE
+
+Ring-LWE replaces unstructured matrices with polynomial rings:
+
+The Ring: R_q = Z_q[X]/(X^n + 1) where n is a power of two.
+
+Instead of vectors and matrices, we work with polynomials:
+- a(x) ∈ R_q^n (a random polynomial)
+- s(x) ∈ R_q (the secret polynomial with small coefficients)
+- e(x) ∈ R_q (the error polynomial with small coefficients)
+
+The LWE problem becomes: distinguish (A, A*s + e) from uniform randomness.
+
+The Ring-LWE problem is to distinguish (a, a·s + e) from uniform in R_q × R_q.
+
+### Key Differences
+
+| Aspect           | LWE                    | Ring-LWE                         |
+|------------------|------------------------|----------------------------------|
+| Structure        | Random matrices        | Polynomial rings                 |
+| Public key size  | O(n²)                  | O(n)                             |
+| Computation      | O(n²) matrix multiply  | O(n log n) via NTT/FFT           |
+| Security basis   | Unstructured lattices  | Ideal lattices                   |
+
+### Why Ring-LWE is Faster
+
+Multiplication in R_q = Z_q[x]/(x^n + 1) has special structure:
+1. Negacyclic convolution: Multiplying by X^i "rotates" coefficients with sign flips.
+2. NTT acceleration: The Number Theoretic Transform (NTT, like FTT for final fields) reduces polynomial multiplication from O(n²) to O(n log n).
+
+A single polynomial a(X) in Ring-LWE implicitly defines an entire nxn matrix in LWE (a circulant-like structure), but we only store n coefficients.
+
+### Security Relationship
+
+Ring-LWE's security relies on the hardness of problems in ideal lattices (lattices with additional algebraic structure). The relationship to LWE security:
+- **Worst-case to average-case**: Ring-LWE has quantum reductions from worst-case problems on ideal lattices (SVP in ideal lattices)
+- **More structure = potential weakness?**: The ring structure theoretically gives attackers more to exploit, but no practical attacks have emerged
+- **Practical security**: Ring-LWE is considered secure for appropriate parameters, and is used in post-quantum standards like Kyber/ML-KEM

@@ -56,10 +56,10 @@ impl RingElement {
     /// Multiply two polynomials (no modular reduction yet)
     fn poly_mul_schoolbook(a: &[u32], b: &[u32]) -> Vec<u32> {
         let d = a.len();
-        let mut result = vec![0; 2 * d - 1];
+        let mut result = vec![0u32; 2 * d - 1];
         for i in 0..d {
             for j in 0..d {
-                result[i + j] += a[i].wrapping_mul(b[j]);
+                result[i + j] = result[i + j].wrapping_add(a[i].wrapping_mul(b[j]));
             }
         }
         result
@@ -125,8 +125,8 @@ impl RingElement {
         }
     }
 
-     /// Uniformly random polynomial
-     pub fn random(d: usize, rng: &mut impl rand::Rng) -> Self {
+    /// Uniformly random polynomial
+    pub fn random(d: usize, rng: &mut impl rand::Rng) -> Self {
         let coeffs: Vec<u32> = (0..d).map(|_| rng.random()).collect();
         Self { coeffs }
     }
@@ -294,7 +294,7 @@ mod tests {
         let result = a.neg();
         assert_eq!(
             result.coeffs,
-            vec![u32::MAX, u32::MAX -1, u32::MAX - 2, u32::MAX - 3]
+            vec![u32::MAX, u32::MAX - 1, u32::MAX - 2, u32::MAX - 3]
         );
     }
 
