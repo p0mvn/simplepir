@@ -1,4 +1,5 @@
 pub mod client;
+pub mod double_pir;
 pub mod lwe_to_rlwe;
 pub mod matrix_database;
 pub mod params;
