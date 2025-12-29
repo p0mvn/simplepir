@@ -1,0 +1,13 @@
+# Downloaded HIBP data (too large for git)
+data/
+**/test_data/
+
+# Rust build artifacts
+target/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+
