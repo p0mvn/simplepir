@@ -1,0 +1,45 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug",
+            "cargo": {
+                "args": ["build", "--manifest-path=${workspaceFolder}/pir/Cargo.toml"]
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": ["rust"],
+            "env": {
+                "PATH": "/Users/roman/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+            },
+            "initCommands": [
+                "command script import \"/Users/roman/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/etc/lldb_lookup.py\"",
+                "command source \"/Users/roman/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/etc/lldb_commands\""
+            ]
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Test: pack_naive_d4",
+            "cargo": {
+                "args": ["test", "--no-run", "--lib", "--manifest-path=${workspaceFolder}/pir/Cargo.toml"],
+                "filter": {
+                    "kind": "lib"
+                }
+            },
+            "args": ["lwe_to_rlwe::tests::test_pack_naive_d4", "--exact", "--nocapture"],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": ["rust"],
+            "env": {
+                "PATH": "/Users/roman/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+            },
+            "initCommands": [
+                "command script import \"/Users/roman/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/etc/lldb_lookup.py\"",
+                "command source \"/Users/roman/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/etc/lldb_commands\""
+            ]
+        }
+    ]
+}
+

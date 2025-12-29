@@ -1,0 +1,33 @@
+{
+    "lldb.launch.sourceLanguages": ["rust"],
+    "lldb.showDisassembly": "never",
+    "lldb.dereferencePointers": true,
+    "lldb.displayFormat": "auto",
+    "lldb.cargo": "/Users/roman/.cargo/bin/cargo",
+    "lldb.adapterEnv": {
+        "PATH": "/Users/roman/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+    },
+    "lldb.launch.env": {
+        "PATH": "/Users/roman/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+    },
+    
+    "rust-analyzer.debug.engine": "vadimcn.vscode-lldb",
+    "rust-analyzer.debug.engineSettings": {
+        "sourceLanguages": ["rust"],
+        "env": {
+            "PATH": "/Users/roman/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+        },
+        "initCommands": [
+            "command script import \"/Users/roman/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/etc/lldb_lookup.py\"",
+            "command source \"/Users/roman/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/etc/lldb_commands\""
+        ]
+    },
+    "rust-analyzer.runnables.extraEnv": {
+        "PATH": "/Users/roman/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+    },
+    
+    "terminal.integrated.env.osx": {
+        "PATH": "/Users/roman/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+    }
+}
+
