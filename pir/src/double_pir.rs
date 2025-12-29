@@ -348,10 +348,6 @@ pub struct DoublePirServer {
     seed_col: MatrixSeed,
     /// Seed for second matrix
     seed_row: MatrixSeed,
-    /// First matrix A₁
-    a_col: LweMatrix,
-    /// Second matrix A₂
-    a_row: LweMatrix,
     /// First hint
     hint_col: ClientHint,
     /// Second hint
@@ -398,8 +394,6 @@ impl DoublePirServer {
             db,
             seed_col,
             seed_row,
-            a_col,
-            a_row,
             hint_col,
             hint_row,
             hint_cross,
