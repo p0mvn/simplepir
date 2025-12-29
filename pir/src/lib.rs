@@ -2,6 +2,7 @@ pub mod client;
 pub mod double_pir;
 pub mod lwe_to_rlwe;
 pub mod matrix_database;
+pub mod mode_selector;
 pub mod params;
 pub mod pir;
 pub mod pir_trait;
