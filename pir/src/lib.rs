@@ -3,6 +3,7 @@ pub mod lwe_to_rlwe;
 pub mod matrix_database;
 pub mod params;
 pub mod pir;
+pub mod pir_trait;
 pub mod regev;
 pub mod ring;
 pub mod ring_regev;

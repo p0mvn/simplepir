@@ -2,9 +2,11 @@ use rand::Rng;
 use rayon::prelude::*;
 
 use crate::{
+    client::SimplePir,
     matrix_database::MatrixDatabase,
     params::LweParams,
-    pir::{Answer, ClientHint, LweMatrix, MatrixSeed, Query},
+    pir::{Answer, ClientHint, LweMatrix, MatrixSeed, Query, SetupMessage},
+    pir_trait::PirServer as PirServerTrait,
 };
 
 /// Server state
@@ -82,6 +84,40 @@ impl PirServer {
     /// Answer: compute DB · query
     pub fn answer(&self, query: &Query) -> Answer {
         Answer(self.db.multiply_vec(&query.0))
+    }
+
+    /// Number of records in the database
+    pub fn num_records(&self) -> usize {
+        self.db.num_records
+    }
+
+    /// Size of each record in bytes
+    pub fn record_size(&self) -> usize {
+        self.db.record_size
+    }
+}
+
+// ============================================================================
+// Trait Implementation for SimplePIR
+// ============================================================================
+
+impl PirServerTrait for PirServer {
+    type Protocol = SimplePir;
+
+    fn setup(&self) -> SetupMessage {
+        self.setup_message()
+    }
+
+    fn answer(&self, query: &Query) -> Answer {
+        self.answer(query)
+    }
+
+    fn num_records(&self) -> usize {
+        self.num_records()
+    }
+
+    fn record_size(&self) -> usize {
+        self.record_size()
     }
 }
 

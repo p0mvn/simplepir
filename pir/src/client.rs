@@ -1,9 +1,24 @@
 use crate::{
     params::LweParams,
     pir::{Answer, ClientHint, LweMatrix, Query, SetupMessage},
+    pir_trait::{CommunicationCost, PirClient as PirClientTrait, PirProtocol},
     regev::{Ciphertext, SecretKey, decrypt, encrypt},
 };
 use rand::Rng;
+
+// ============================================================================
+// SimplePIR Protocol Type
+// ============================================================================
+
+/// Marker type for SimplePIR protocol
+pub struct SimplePir;
+
+impl PirProtocol for SimplePir {
+    type Query = Query;
+    type Answer = Answer;
+    type QueryState = QueryState;
+    type SetupData = SetupMessage;
+}
 
 /// Client state (reusable across queries)
 pub struct PirClient {
@@ -84,6 +99,71 @@ impl PirClient {
                 decrypt(&self.params, &sk, &ct) as u8
             })
             .collect()
+    }
+
+    /// Number of records in the database
+    pub fn num_records(&self) -> usize {
+        // records_per_group = db_cols, num_groups = db_rows / record_size
+        let num_groups = self.db_rows / self.record_size;
+        num_groups * self.db_cols
+    }
+
+    /// Size of each record in bytes
+    pub fn record_size(&self) -> usize {
+        self.record_size
+    }
+}
+
+// ============================================================================
+// Trait Implementations for SimplePIR
+// ============================================================================
+
+impl PirClientTrait for PirClient {
+    type Protocol = SimplePir;
+
+    fn from_setup(setup: SetupMessage, params: LweParams) -> Self {
+        PirClient::new(setup, params)
+    }
+
+    fn query(&self, record_idx: usize, rng: &mut impl Rng) -> (QueryState, Query) {
+        self.query(record_idx, rng)
+    }
+
+    fn recover(&self, state: &QueryState, answer: &Answer) -> Vec<u8> {
+        self.recover(state, answer)
+    }
+
+    fn num_records(&self) -> usize {
+        self.num_records()
+    }
+
+    fn record_size(&self) -> usize {
+        self.record_size()
+    }
+}
+
+// ============================================================================
+// Communication Cost Implementations
+// ============================================================================
+
+impl CommunicationCost for Query {
+    fn size_bytes(&self) -> usize {
+        self.0.len() * std::mem::size_of::<u32>()
+    }
+}
+
+impl CommunicationCost for Answer {
+    fn size_bytes(&self) -> usize {
+        self.0.len() * std::mem::size_of::<u32>()
+    }
+}
+
+impl CommunicationCost for SetupMessage {
+    fn size_bytes(&self) -> usize {
+        // matrix_seed: 32 bytes
+        // hint_c: rows * cols * 4 bytes
+        // dimensions: negligible (usize)
+        32 + self.hint_c.data.len() * std::mem::size_of::<u32>()
     }
 }
 
