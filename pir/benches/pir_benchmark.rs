@@ -1,8 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use pir::client::PirClient;
 use pir::matrix_database::MatrixDatabase;
 use pir::params::LweParams;
-use pir::server::PirServer;
+use pir::simple::{PirClient, PirServer};
 
 const RECORD_SIZE: usize = 3;
 
