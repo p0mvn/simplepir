@@ -26,8 +26,8 @@ mod downloader;
 mod checker;
 mod error;
 
-pub use downloader::{Downloader, DownloadProgress};
-pub use checker::PasswordChecker;
+pub use downloader::{DownloadSize, Downloader, DownloadProgress, InMemoryDownloader};
+pub use checker::{PasswordChecker, CheckerStats};
 pub use error::Error;
 
 /// SHA-1 hash a password and return uppercase hex string
@@ -65,4 +65,3 @@ mod tests {
         assert_eq!(suffix, "1E4C9B93F3F0682250B6CF8331B7EE68FD8");
     }
 }
-

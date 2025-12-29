@@ -5,9 +5,10 @@
 
 use crate::Error;
 use futures::{stream, StreamExt};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
@@ -217,5 +218,189 @@ pub enum DownloadSize {
     Sample,
     /// 1,048,576 files, ~38GB
     Full,
+}
+
+impl DownloadSize {
+    /// Parse from string (case-insensitive)
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "tiny" => Some(DownloadSize::Tiny),
+            "sample" => Some(DownloadSize::Sample),
+            "full" => Some(DownloadSize::Full),
+            _ => None,
+        }
+    }
+
+    /// Get the number of ranges for this size
+    pub fn range_count(&self) -> usize {
+        match self {
+            DownloadSize::Tiny => 256,
+            DownloadSize::Sample => 65_536,
+            DownloadSize::Full => 1_048_576,
+        }
+    }
+
+    /// Get a human-readable description
+    pub fn description(&self) -> &'static str {
+        match self {
+            DownloadSize::Tiny => "tiny (256 ranges, ~20MB)",
+            DownloadSize::Sample => "sample (65,536 ranges, ~2.5GB)",
+            DownloadSize::Full => "full (1,048,576 ranges, ~38GB)",
+        }
+    }
+
+    fn prefixes(&self) -> Vec<String> {
+        match self {
+            DownloadSize::Tiny => Downloader::tiny_prefixes(),
+            DownloadSize::Sample => Downloader::sample_prefixes(),
+            DownloadSize::Full => Downloader::all_prefixes(),
+        }
+    }
+}
+
+/// Downloads HIBP data directly into memory without writing to disk
+pub struct InMemoryDownloader {
+    concurrent_requests: usize,
+    client: reqwest::Client,
+}
+
+impl InMemoryDownloader {
+    /// Create a new in-memory downloader
+    pub fn new() -> Self {
+        Self {
+            concurrent_requests: 150,
+            client: reqwest::Client::builder()
+                .user_agent("pir-password-checker/0.1")
+                .build()
+                .expect("Failed to create HTTP client"),
+        }
+    }
+
+    /// Set the number of concurrent requests
+    pub fn with_concurrency(mut self, n: usize) -> Self {
+        self.concurrent_requests = n;
+        self
+    }
+
+    /// Download a single range and return the parsed data
+    async fn download_and_parse(&self, prefix: &str) -> Result<(String, HashMap<String, u32>), Error> {
+        let url = format!("https://api.pwnedpasswords.com/range/{}", prefix);
+        let response = self.client.get(&url).send().await?;
+        let body = response.text().await?;
+
+        let mut map = HashMap::new();
+        for line in body.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            // Format: SUFFIX:COUNT
+            if let Some((suffix, count_str)) = line.split_once(':') {
+                if let Ok(count) = count_str.parse::<u32>() {
+                    map.insert(suffix.to_uppercase(), count);
+                }
+            }
+        }
+
+        Ok((prefix.to_string(), map))
+    }
+
+    /// Download HIBP data directly into memory
+    /// Returns a HashMap of prefix -> (suffix -> count)
+    pub async fn download_to_memory(
+        &self,
+        size: DownloadSize,
+    ) -> Result<HashMap<String, HashMap<String, u32>>, Error> {
+        let prefixes = size.prefixes();
+        let total = prefixes.len();
+
+        info!(
+            "Starting in-memory download of {} HIBP dataset ({} ranges)...",
+            size.description(),
+            total
+        );
+
+        let cache: Arc<Mutex<HashMap<String, HashMap<String, u32>>>> =
+            Arc::new(Mutex::new(HashMap::with_capacity(total)));
+        let completed = Arc::new(AtomicUsize::new(0));
+        let errors = Arc::new(AtomicUsize::new(0));
+
+        stream::iter(prefixes)
+            .map(|prefix| {
+                let cache = Arc::clone(&cache);
+                let completed = Arc::clone(&completed);
+                let errors = Arc::clone(&errors);
+                async move {
+                    // Retry logic
+                    let mut attempts = 0;
+                    loop {
+                        match self.download_and_parse(&prefix).await {
+                            Ok((prefix, data)) => {
+                                let hash_count = data.len();
+                                {
+                                    let mut cache = cache.lock().unwrap();
+                                    cache.insert(prefix, data);
+                                }
+                                let current = completed.fetch_add(1, Ordering::SeqCst) + 1;
+
+                                // Log progress at regular intervals
+                                if current % 1000 == 0 || current == total {
+                                    let pct = (current as f64 / total as f64) * 100.0;
+                                    info!(
+                                        "Download progress: {}/{} ranges ({:.1}%) - last batch had {} hashes",
+                                        current, total, pct, hash_count
+                                    );
+                                }
+                                break;
+                            }
+                            Err(e) => {
+                                attempts += 1;
+                                if attempts >= 3 {
+                                    warn!("Failed to download range {} after 3 attempts: {}", prefix, e);
+                                    errors.fetch_add(1, Ordering::SeqCst);
+                                    break;
+                                }
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100 * attempts)).await;
+                            }
+                        }
+                    }
+                }
+            })
+            .buffer_unordered(self.concurrent_requests)
+            .collect::<Vec<_>>()
+            .await;
+
+        let error_count = errors.load(Ordering::SeqCst);
+        let success_count = completed.load(Ordering::SeqCst);
+
+        if error_count > 0 {
+            warn!(
+                "Download completed with {} errors ({} successful, {} failed)",
+                error_count, success_count, error_count
+            );
+        } else {
+            info!("Download completed successfully: {} ranges loaded", success_count);
+        }
+
+        let result = Arc::try_unwrap(cache)
+            .expect("Arc should have single owner")
+            .into_inner()
+            .unwrap();
+
+        let total_hashes: usize = result.values().map(|m| m.len()).sum();
+        info!(
+            "In-memory dataset ready: {} ranges, {} total hashes",
+            result.len(),
+            total_hashes
+        );
+
+        Ok(result)
+    }
+}
+
+impl Default for InMemoryDownloader {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 

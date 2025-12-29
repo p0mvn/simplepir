@@ -19,4 +19,3 @@ pub enum Error {
     #[error("Parse error: {0}")]
     Parse(String),
 }
-

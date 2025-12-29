@@ -9,7 +9,7 @@ use tracing::info;
 
 /// Password checker using downloaded HIBP range files
 pub struct PasswordChecker {
-    ranges_dir: PathBuf,
+    ranges_dir: Option<PathBuf>,
     /// Optional in-memory cache for loaded ranges
     cache: Option<HashMap<String, HashMap<String, u32>>>,
 }
@@ -25,18 +25,45 @@ impl PasswordChecker {
             )));
         }
         Ok(Self {
-            ranges_dir: path,
+            ranges_dir: Some(path),
             cache: None,
         })
+    }
+
+    /// Create a checker from a pre-loaded in-memory cache
+    /// This is useful when data was downloaded directly to memory
+    pub fn from_cache(cache: HashMap<String, HashMap<String, u32>>) -> Self {
+        let total_hashes: usize = cache.values().map(|m| m.len()).sum();
+        info!(
+            "Created PasswordChecker from in-memory cache: {} ranges, {} hashes",
+            cache.len(),
+            total_hashes
+        );
+        Self {
+            ranges_dir: None,
+            cache: Some(cache),
+        }
     }
 
     /// Load all range files into memory for faster lookups
     /// Warning: This uses ~20-40GB of RAM for the full database
     pub fn load_into_memory(mut self) -> Result<Self, Error> {
+        // Already loaded from cache
+        if self.cache.is_some() {
+            return Ok(self);
+        }
+
+        let ranges_dir = self.ranges_dir.as_ref().ok_or_else(|| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "No ranges directory configured",
+            ))
+        })?;
+
         info!("Loading HIBP data into memory...");
         let mut cache = HashMap::new();
 
-        let entries: Vec<_> = fs::read_dir(&self.ranges_dir)?
+        let entries: Vec<_> = fs::read_dir(ranges_dir)?
             .filter_map(|e| e.ok())
             .filter(|e| e.path().is_file())
             .collect();
@@ -110,7 +137,14 @@ impl PasswordChecker {
         }
 
         // Read from disk
-        let file_path = self.ranges_dir.join(&prefix);
+        let ranges_dir = self.ranges_dir.as_ref().ok_or_else(|| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "No ranges directory - checker was created from in-memory cache only",
+            ))
+        })?;
+
+        let file_path = ranges_dir.join(&prefix);
         if !file_path.exists() {
             return Err(Error::RangeNotFound(prefix));
         }
@@ -135,14 +169,20 @@ impl PasswordChecker {
                 total_hashes,
                 in_memory: true,
             }
-        } else {
+        } else if let Some(ranges_dir) = &self.ranges_dir {
             // Count files on disk
-            let ranges_loaded = fs::read_dir(&self.ranges_dir)
+            let ranges_loaded = fs::read_dir(ranges_dir)
                 .map(|entries| entries.filter_map(|e| e.ok()).count())
                 .unwrap_or(0);
             CheckerStats {
                 ranges_loaded,
                 total_hashes: 0, // Unknown without loading
+                in_memory: false,
+            }
+        } else {
+            CheckerStats {
+                ranges_loaded: 0,
+                total_hashes: 0,
                 in_memory: false,
             }
         }
@@ -219,4 +259,3 @@ mod tests {
         assert_eq!(result, Some(9999));
     }
 }
-

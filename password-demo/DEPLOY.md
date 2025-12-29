@@ -5,16 +5,16 @@ This guide covers deploying the HIBP Password Checker to production.
 ## Architecture
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────────┐
-│   Vercel    │────▶│   Railway   │────▶│  HIBP Data      │
-│  (Next.js)  │     │(Rust Server)│     │  (Volume)       │
-└─────────────┘     └─────────────┘     └─────────────────┘
+┌─────────────┐     ┌─────────────┐
+│   Vercel    │────▶│   Railway   │
+│  (Next.js)  │     │(Rust Server)│
+└─────────────┘     └─────────────┘
 ```
 
 ## Prerequisites
 
 - GitHub repository connected to both Vercel and Railway
-- Railway account with billing enabled (for volumes)
+- Railway account
 - Vercel account
 
 ---
@@ -62,52 +62,38 @@ vercel --prod
 
 In the Railway service settings:
 
-- **Root Directory**: Leave empty (builds from repo root)
+- **Root Directory**: `password-demo`
 - **Builder**: Dockerfile
-- **Dockerfile Path**: `password-demo/server/Dockerfile`
+- **Dockerfile Path**: `Dockerfile`
 - **Watch Paths**: `password-demo/server/**`, `password-demo/hibp/**`
 
-### Step 3: Add Volume for HIBP Data
+### Step 3: Set Environment Variables
 
-1. In your Railway service, click **+ New** → **Volume**
-2. Configure:
-   - **Mount Path**: `/app/data/ranges`
-   - **Size**: 50GB (full dataset is ~38GB)
-
-### Step 4: Set Environment Variables
+Set these environment variables in the Railway dashboard:
 
 ```
 PORT=3000
-HIBP_DATA_DIR=/app/data/ranges
-HIBP_MEMORY_MODE=true
+HIBP_DOWNLOAD_ON_START=sample
 RUST_LOG=info
 ```
 
-### Step 5: Initial Data Load
+**`HIBP_DOWNLOAD_ON_START` options:**
 
-Since the volume starts empty, you need to populate it. Options:
+| Value | Ranges | Data Size | Download Time | Memory Usage |
+|-------|--------|-----------|---------------|--------------|
+| `tiny` | 256 | ~20MB | ~2 seconds | ~50MB |
+| `sample` | 65,536 | ~2.5GB | ~5 minutes | ~2GB |
+| `full` | 1,048,576 | ~38GB | ~15 minutes | ~20-40GB |
 
-**Option A: Railway Shell (Recommended for small datasets)**
-```bash
-# In Railway shell
-cd /app/data/ranges
-curl -s --retry 10 --remote-name-all --parallel --parallel-max 50 \
-  "https://api.pwnedpasswords.com/range/{0,1,2,3,4,5,6,7,8,9,A,B,C,D,E,F}{0,1,2,3,4,5,6,7,8,9,A,B,C,D,E,F}{0,1,2,3,4,5,6,7,8,9,A,B,C,D,E,F}"
-```
+> **Recommended**: Use `sample` for most deployments. It covers ~6% of all password hashes which is sufficient for demo purposes. Use `full` only if you need complete coverage and have 40GB+ RAM available.
 
-**Option B: Pre-built Data Image**
-Create a Docker image with data baked in (larger image, but faster cold starts).
-
-**Option C: GitHub Actions + Railway API**
-Use the `sync-hibp.yml` workflow to download data and trigger redeployment.
-
-### Step 6: Generate Domain
+### Step 4: Generate Domain
 
 In Railway settings, go to **Settings** → **Networking** → **Generate Domain**
 
 Copy the URL (e.g., `hibp-server-production.up.railway.app`)
 
-### Step 7: Update Vercel
+### Step 5: Update Vercel
 
 Go back to Vercel and update the environment variable:
 ```
@@ -118,21 +104,41 @@ Redeploy if needed.
 
 ---
 
-## GitHub Actions Setup (Optional)
+## Alternative: Local Files with Volume (Advanced)
 
-For daily HIBP data sync:
+If you prefer to use pre-downloaded data files instead of downloading on startup:
 
-1. Go to Railway Dashboard → **Account Settings** → **Tokens**
-2. Create a new token
-3. In GitHub repo settings, add secrets:
-   - `RAILWAY_TOKEN`: Your Railway API token
-   - `RAILWAY_PROJECT_ID`: Found in Railway project settings URL
-   - `RAILWAY_SERVICE_ID`: Found in Railway service settings
+### Step 1: Create Volume
 
-The workflow at `.github/workflows/sync-hibp.yml` will:
-- Run daily at 2 AM UTC
-- Download fresh HIBP data
-- Trigger Railway redeploy
+Configure a volume in Railway:
+- **Mount Path**: `/app/data/ranges`
+- **Name**: `hibp-data`
+
+Increase the size to ~50GB for the full dataset.
+
+### Step 2: Set Environment Variables
+
+```
+PORT=3000
+HIBP_DATA_DIR=/app/data/ranges
+HIBP_MEMORY_MODE=true
+RUST_LOG=info
+```
+
+Note: Do NOT set `HIBP_DOWNLOAD_ON_START` when using local files.
+
+### Step 3: Populate the Volume
+
+Use Railway shell to download data:
+```bash
+cd /app/data/ranges
+# Download tiny sample
+for prefix in {0..9} {A..F}; do
+  for suffix in {0..9} {A..F}; do
+    curl -s "https://api.pwnedpasswords.com/range/000${prefix}${suffix}" -o "000${prefix}${suffix}"
+  done
+done
+```
 
 ---
 
@@ -141,7 +147,7 @@ The workflow at `.github/workflows/sync-hibp.yml` will:
 ### Check Server Health
 ```bash
 curl https://your-railway-app.railway.app/health
-# Expected: {"status":"ok","ranges_loaded":1048576,"total_hashes":...}
+# Expected: {"status":"ok","ranges_loaded":65536,"total_hashes":...}
 ```
 
 ### Check Password
@@ -162,11 +168,14 @@ Visit your Vercel deployment URL and try checking a password.
 | Service | Free Tier | Production |
 |---------|-----------|------------|
 | Vercel | ✅ Hobby tier works | $20/mo Pro |
-| Railway | ❌ Need volume ($5+) | ~$20-50/mo |
+| Railway | ~$5-20/mo | ~$20-50/mo |
 
-**Railway breakdown:**
-- Compute: ~$5-10/mo (depending on memory)
-- Volume: $0.15/GB/mo × 50GB = ~$7.50/mo
+**Railway breakdown (sample dataset):**
+- Compute: ~$5-10/mo (2GB RAM)
+- Egress: $0.10/GB after 100GB free
+
+**Railway breakdown (full dataset):**
+- Compute: ~$20-40/mo (40GB RAM)
 - Egress: $0.10/GB after 100GB free
 
 ---
@@ -174,9 +183,14 @@ Visit your Vercel deployment URL and try checking a password.
 ## Troubleshooting
 
 ### Server shows 0 hashes
-- Check volume is mounted correctly
-- Verify data was downloaded to `/app/data/ranges`
-- Check `HIBP_DATA_DIR` environment variable
+- Check `HIBP_DOWNLOAD_ON_START` is set correctly
+- Check Railway logs for download progress/errors
+- Verify the server has enough memory for the dataset size
+
+### Download fails or times out
+- Try a smaller dataset (`tiny` or `sample`)
+- Check Railway service has network access
+- Review logs for specific error messages
 
 ### UI shows "Server Offline"
 - Verify `NEXT_PUBLIC_API_URL` is set correctly
@@ -184,15 +198,20 @@ Visit your Vercel deployment URL and try checking a password.
 - Verify CORS is enabled (it is by default)
 
 ### Slow cold starts
-- Railway: Increase memory allocation
-- Consider keeping service awake with health checks
+- This is expected when using `HIBP_DOWNLOAD_ON_START`
+- Consider using `sample` instead of `full` for faster startups
+- Railway: Enable "Always On" to prevent cold starts
 
 ---
 
-## Local Testing
+## Local Development
 
 ```bash
-# Terminal 1: Start server
+# Terminal 1: Start server (downloads tiny dataset on startup)
+cd password-demo/server
+HIBP_DOWNLOAD_ON_START=tiny cargo run --release
+
+# Or load from local files
 cd password-demo/server
 HIBP_DATA_DIR=../data/ranges cargo run --release
 
@@ -201,3 +220,18 @@ cd password-demo/ui
 NEXT_PUBLIC_API_URL=http://localhost:3000 npm run dev
 ```
 
+---
+
+## Docker
+
+```bash
+# Build
+cd password-demo
+docker build -t hibp-server .
+
+# Run with download on startup
+docker run -p 3000:3000 -e HIBP_DOWNLOAD_ON_START=sample hibp-server
+
+# Or run with local data
+docker run -p 3000:3000 -v /path/to/data:/app/data/ranges hibp-server
+```

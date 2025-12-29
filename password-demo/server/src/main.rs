@@ -10,8 +10,13 @@
 //! ## Usage
 //!
 //! ```bash
-//! # Start server (loads data from ./data/ranges by default)
+//! # Start server loading data from local files (default)
 //! HIBP_DATA_DIR=./data/ranges cargo run --release
+//!
+//! # Start server and download data on startup (no local files needed)
+//! HIBP_DOWNLOAD_ON_START=tiny cargo run --release   # 256 ranges, ~20MB
+//! HIBP_DOWNLOAD_ON_START=sample cargo run --release # 65k ranges, ~2.5GB
+//! HIBP_DOWNLOAD_ON_START=full cargo run --release   # 1M ranges, ~38GB
 //!
 //! # Check a password hash
 //! curl -X POST http://localhost:3000/check \
@@ -25,11 +30,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use hibp::PasswordChecker;
+use hibp::{DownloadSize, InMemoryDownloader, PasswordChecker};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Instant;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Application state shared across all handlers
 struct AppState {
@@ -110,6 +116,12 @@ async fn check(
 
 #[tokio::main]
 async fn main() {
+    // Load .env file if present
+    match dotenvy::dotenv() {
+        Ok(path) => eprintln!("Loaded .env from {:?}", path),
+        Err(_) => {} // .env file is optional
+    }
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -119,50 +131,101 @@ async fn main() {
         .init();
 
     // Get configuration from environment
-    let data_dir = std::env::var("HIBP_DATA_DIR").unwrap_or_else(|_| "./data/ranges".to_string());
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
-    let load_into_memory = std::env::var("HIBP_MEMORY_MODE")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(true);
+
+    // Check if we should download data on startup
+    let download_on_start = std::env::var("HIBP_DOWNLOAD_ON_START").ok();
 
     info!("Starting HIBP server...");
-    info!("Data directory: {}", data_dir);
     info!("Port: {}", port);
-    info!("Memory mode: {}", load_into_memory);
 
-    // Load HIBP data
-    info!("Loading HIBP data from {}...", data_dir);
-    let checker = match PasswordChecker::from_directory(&data_dir) {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to load HIBP data: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    // Optionally load into memory for faster lookups
-    let checker = if load_into_memory {
-        info!("Loading data into memory (this may take a while for full dataset)...");
-        match checker.load_into_memory() {
-            Ok(c) => {
-                let stats = c.stats();
-                info!(
-                    "Loaded {} ranges with {} total hashes",
-                    stats.ranges_loaded, stats.total_hashes
+    let checker = if let Some(size_str) = download_on_start {
+        // Download data directly to memory on startup
+        let size = match DownloadSize::from_str(&size_str) {
+            Some(s) => s,
+            None => {
+                error!(
+                    "Invalid HIBP_DOWNLOAD_ON_START value: '{}'. Use 'tiny', 'sample', or 'full'",
+                    size_str
                 );
-                c
+                std::process::exit(1);
+            }
+        };
+
+        info!("==============================================");
+        info!("HIBP_DOWNLOAD_ON_START={}", size_str);
+        info!("Downloading {} dataset from HaveIBeenPwned API...", size.description());
+        info!("This will download {} ranges directly into memory", size.range_count());
+        info!("==============================================");
+
+        let start = Instant::now();
+        let downloader = InMemoryDownloader::new();
+
+        match downloader.download_to_memory(size).await {
+            Ok(cache) => {
+                let elapsed = start.elapsed();
+                let total_hashes: usize = cache.values().map(|m| m.len()).sum();
+
+                info!("==============================================");
+                info!("Download completed successfully!");
+                info!("  Ranges: {}", cache.len());
+                info!("  Total hashes: {}", total_hashes);
+                info!("  Time: {:.1}s", elapsed.as_secs_f64());
+                info!("==============================================");
+
+                PasswordChecker::from_cache(cache)
             }
             Err(e) => {
-                error!("Failed to load data into memory: {}", e);
+                error!("Failed to download HIBP data: {}", e);
                 std::process::exit(1);
             }
         }
     } else {
-        info!("Running in disk mode (slower lookups, less memory)");
-        checker
+        // Load from local files (default behavior)
+        let data_dir = std::env::var("HIBP_DATA_DIR").unwrap_or_else(|_| "./data/ranges".to_string());
+        let load_into_memory = std::env::var("HIBP_MEMORY_MODE")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(true);
+
+        info!("Data source: local files");
+        info!("Data directory: {}", data_dir);
+        info!("Memory mode: {}", load_into_memory);
+
+        // Load HIBP data from files
+        info!("Loading HIBP data from {}...", data_dir);
+        let checker = match PasswordChecker::from_directory(&data_dir) {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to load HIBP data: {}", e);
+                warn!("Hint: Set HIBP_DOWNLOAD_ON_START=tiny to download data on startup");
+                std::process::exit(1);
+            }
+        };
+
+        // Optionally load into memory for faster lookups
+        if load_into_memory {
+            info!("Loading data into memory (this may take a while for full dataset)...");
+            match checker.load_into_memory() {
+                Ok(c) => {
+                    let stats = c.stats();
+                    info!(
+                        "Loaded {} ranges with {} total hashes",
+                        stats.ranges_loaded, stats.total_hashes
+                    );
+                    c
+                }
+                Err(e) => {
+                    error!("Failed to load data into memory: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            info!("Running in disk mode (slower lookups, less memory)");
+            checker
+        }
     };
 
     let state = Arc::new(AppState { checker });
