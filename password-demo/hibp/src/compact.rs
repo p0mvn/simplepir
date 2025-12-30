@@ -119,6 +119,12 @@ impl CompactHibpData {
     pub fn iter(&self) -> impl Iterator<Item = &HashEntry> {
         self.entries.iter()
     }
+    
+    /// Consume and return the entries vector
+    /// Use this to transfer ownership for building PIR database
+    pub fn into_entries(self) -> Vec<HashEntry> {
+        self.entries
+    }
 
     /// Decode a 40-character hex string to 20 bytes
     fn decode_hex(hex: &str) -> Option<HashBytes> {

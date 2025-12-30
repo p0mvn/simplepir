@@ -160,12 +160,31 @@ impl BinaryFuseFilter {
         pairs: &[(K, Vec<u8>)],
         value_size: usize,
     ) -> Result<Self, BinaryFuseError> {
+        Self::build_internal(pairs, value_size, true, 0x517cc1b727220a95)
+    }
+    
+    /// Build without duplicate checking - use when you know keys are unique.
+    /// This saves significant memory for large datasets.
+    pub fn build_unchecked<K: Hash + Eq + Clone>(
+        pairs: &[(K, Vec<u8>)],
+        value_size: usize,
+    ) -> Result<Self, BinaryFuseError> {
+        Self::build_internal(pairs, value_size, false, 0x517cc1b727220a95)
+    }
+    
+    fn build_internal<K: Hash + Eq + Clone>(
+        pairs: &[(K, Vec<u8>)],
+        value_size: usize,
+        check_duplicates: bool,
+        rng_seed: u64,
+    ) -> Result<Self, BinaryFuseError> {
         if pairs.is_empty() {
             return Err(BinaryFuseError::EmptyInput);
         }
 
-        // Validate all values have correct size
-        for (_, v) in pairs {
+        // Validate all values have correct size (sample check for large datasets)
+        let check_count = if pairs.len() > 10000 { 1000 } else { pairs.len() };
+        for (_, v) in pairs.iter().take(check_count) {
             if v.len() != value_size {
                 return Err(BinaryFuseError::ValueSizeMismatch {
                     expected: value_size,
@@ -174,11 +193,14 @@ impl BinaryFuseFilter {
             }
         }
 
-        // Check for duplicate keys
-        let mut seen = HashMap::with_capacity(pairs.len());
-        for (k, _) in pairs {
-            if seen.insert(k, ()).is_some() {
-                return Err(BinaryFuseError::DuplicateKey);
+        // Check for duplicate keys (skip for large datasets to save memory)
+        // For very large datasets, duplicates will cause construction failure anyway
+        if check_duplicates && pairs.len() < 10_000_000 {
+            let mut seen = HashMap::with_capacity(pairs.len());
+            for (k, _) in pairs {
+                if seen.insert(k, ()).is_some() {
+                    return Err(BinaryFuseError::DuplicateKey);
+                }
             }
         }
 
@@ -189,8 +211,8 @@ impl BinaryFuseFilter {
         let filter_size = ARITY * segment_size;
         let segment_length_mask = (segment_size - 1) as u32;
 
-        // Try construction with different seeds (using default RNG seed)
-        Self::build_with_rng_seed(pairs, value_size, segment_size, filter_size, segment_length_mask, 0x517cc1b727220a95)
+        // Try construction with different seeds
+        Self::build_with_rng_seed(pairs, value_size, segment_size, filter_size, segment_length_mask, rng_seed)
     }
     
     /// Build a Binary Fuse Filter with a specific RNG seed for reproducibility.
@@ -201,34 +223,17 @@ impl BinaryFuseFilter {
         value_size: usize,
         rng_seed: u64,
     ) -> Result<Self, BinaryFuseError> {
-        if pairs.is_empty() {
-            return Err(BinaryFuseError::EmptyInput);
-        }
-
-        // Validate all values have correct size
-        for (_, v) in pairs {
-            if v.len() != value_size {
-                return Err(BinaryFuseError::ValueSizeMismatch {
-                    expected: value_size,
-                    got: v.len(),
-                });
-            }
-        }
-
-        // Check for duplicate keys
-        let mut seen = HashMap::with_capacity(pairs.len());
-        for (k, _) in pairs {
-            if seen.insert(k, ()).is_some() {
-                return Err(BinaryFuseError::DuplicateKey);
-            }
-        }
-
-        let n = pairs.len();
-        let segment_size = calculate_segment_size(n);
-        let filter_size = ARITY * segment_size;
-        let segment_length_mask = (segment_size - 1) as u32;
-
-        Self::build_with_rng_seed(pairs, value_size, segment_size, filter_size, segment_length_mask, rng_seed)
+        Self::build_internal(pairs, value_size, true, rng_seed)
+    }
+    
+    /// Build with a specific RNG seed, without duplicate checking.
+    /// Use when you know keys are unique to save memory on large datasets.
+    pub fn build_with_seed_unchecked<K: Hash + Eq + Clone>(
+        pairs: &[(K, Vec<u8>)],
+        value_size: usize,
+        rng_seed: u64,
+    ) -> Result<Self, BinaryFuseError> {
+        Self::build_internal(pairs, value_size, false, rng_seed)
     }
     
     /// Internal: Try building with seeds from a specific RNG
@@ -255,6 +260,14 @@ impl BinaryFuseFilter {
     }
 
     /// Attempt to build the filter with a specific seed
+    /// 
+    /// Memory-efficient implementation that avoids O(filter_size) allocation
+    /// for slot-to-key mapping. Instead uses a flat sorted array of (slot, key_idx)
+    /// pairs which uses O(3*n) memory instead of O(filter_size).
+    /// 
+    /// For large datasets (e.g., 900M entries):
+    /// - Old approach: 1.5B slots * 24 bytes/Vec = 36 GB just for empty Vecs
+    /// - New approach: 900M * 3 * 8 bytes = 21.6 GB for the mapping
     fn try_build<K: Hash + Eq + Clone>(
         pairs: &[(K, Vec<u8>)],
         value_size: usize,
@@ -266,59 +279,95 @@ impl BinaryFuseFilter {
         let n = pairs.len();
 
         // Compute fingerprints and positions for all keys
-        let mut keys_info: Vec<(u64, [usize; 3], &[u8])> = Vec::with_capacity(n);
+        // Memory: n * (8 + 12 + 16) = ~36 bytes per entry
+        let mut keys_info: Vec<(u64, [u32; 3], &[u8])> = Vec::with_capacity(n);
         for (key, value) in pairs {
             let hash = hash_key(key, seed);
             let positions = compute_positions(hash, segment_size, segment_length_mask);
-            keys_info.push((hash, positions, value.as_slice()));
+            // Store positions as u32 to save memory (filter_size < 4B for reasonable inputs)
+            keys_info.push((hash, [positions[0] as u32, positions[1] as u32, positions[2] as u32], value.as_slice()));
         }
 
         // Build degree counters for each slot
+        // Memory: filter_size * 4 bytes
         let mut degree = vec![0u32; filter_size];
-        let mut slot_to_keys: Vec<Vec<usize>> = vec![Vec::new(); filter_size];
+        
+        for (_, positions, _) in keys_info.iter() {
+            for &pos in positions {
+                degree[pos as usize] += 1;
+            }
+        }
 
+        // Build flat sorted array of (slot, key_idx) for memory efficiency
+        // Memory: n * 3 * 8 bytes (instead of filter_size * 24 bytes for Vec<Vec>)
+        // This is the key optimization - avoids allocating billions of empty Vecs
+        let mut slot_key_pairs: Vec<(u32, u32)> = Vec::with_capacity(n * 3);
         for (key_idx, (_, positions, _)) in keys_info.iter().enumerate() {
             for &pos in positions {
-                degree[pos] += 1;
-                slot_to_keys[pos].push(key_idx);
+                slot_key_pairs.push((pos, key_idx as u32));
+            }
+        }
+        // Sort by slot for binary search
+        slot_key_pairs.sort_unstable_by_key(|&(slot, _)| slot);
+        
+        // Build index into slot_key_pairs for O(1) slot lookup
+        // For each slot, store the starting index in slot_key_pairs
+        // Memory: filter_size * 4 bytes
+        let mut slot_start: Vec<u32> = vec![0; filter_size + 1];
+        {
+            let mut current_slot = 0u32;
+            for (i, &(slot, _)) in slot_key_pairs.iter().enumerate() {
+                while current_slot <= slot {
+                    slot_start[current_slot as usize] = i as u32;
+                    current_slot += 1;
+                }
+            }
+            // Fill remaining slots
+            while (current_slot as usize) <= filter_size {
+                slot_start[current_slot as usize] = slot_key_pairs.len() as u32;
+                current_slot += 1;
             }
         }
 
         // Peeling: find slots with degree 1 and process them
-        let mut stack: Vec<(usize, usize)> = Vec::with_capacity(n); // (key_idx, determining_slot)
+        let mut stack: Vec<(u32, u32)> = Vec::with_capacity(n); // (key_idx, determining_slot)
         let mut processed = vec![false; n];
 
         // Initialize queue with degree-1 slots
-        let mut queue: Vec<usize> = degree
+        let mut queue: Vec<u32> = degree
             .iter()
             .enumerate()
             .filter(|(_, d)| **d == 1)
-            .map(|(i, _)| i)
+            .map(|(i, _)| i as u32)
             .collect();
 
         while let Some(slot) = queue.pop() {
-            if degree[slot] != 1 {
+            if degree[slot as usize] != 1 {
                 continue;
             }
 
-            // Find the unprocessed key in this slot
-            let key_idx = slot_to_keys[slot]
+            // Find the unprocessed key in this slot using the sorted index
+            let start = slot_start[slot as usize] as usize;
+            let end = slot_start[slot as usize + 1] as usize;
+            
+            let key_idx = slot_key_pairs[start..end]
                 .iter()
-                .find(|&&idx| !processed[idx])
-                .copied();
+                .filter(|&&(s, _)| s == slot)
+                .map(|&(_, k)| k)
+                .find(|&idx| !processed[idx as usize]);
 
             let Some(key_idx) = key_idx else {
                 continue;
             };
 
-            processed[key_idx] = true;
+            processed[key_idx as usize] = true;
             stack.push((key_idx, slot));
 
             // Decrease degree for all positions of this key
-            let (_, positions, _) = &keys_info[key_idx];
+            let (_, positions, _) = &keys_info[key_idx as usize];
             for &pos in positions {
-                degree[pos] = degree[pos].saturating_sub(1);
-                if degree[pos] == 1 {
+                degree[pos as usize] = degree[pos as usize].saturating_sub(1);
+                if degree[pos as usize] == 1 {
                     queue.push(pos);
                 }
             }
@@ -328,19 +377,27 @@ impl BinaryFuseFilter {
         if stack.len() != n {
             return Err(BinaryFuseError::ConstructionFailed);
         }
+        
+        // Free memory no longer needed before allocating final data
+        drop(slot_key_pairs);
+        drop(slot_start);
+        drop(degree);
+        drop(processed);
 
         // Assign values in reverse peeling order
         let mut data = vec![0u8; filter_size * value_size];
 
         while let Some((key_idx, determining_slot)) = stack.pop() {
-            let (_, positions, value) = &keys_info[key_idx];
+            let (_, positions, value) = &keys_info[key_idx as usize];
 
             // XOR other two positions to get what this slot should be
             let mut xor_value = value.to_vec();
+            let determining_slot_usize = determining_slot as usize;
 
             for &pos in positions {
-                if pos != determining_slot {
-                    let slot_data = &data[pos * value_size..(pos + 1) * value_size];
+                let pos_usize = pos as usize;
+                if pos_usize != determining_slot_usize {
+                    let slot_data = &data[pos_usize * value_size..(pos_usize + 1) * value_size];
                     for (i, &b) in slot_data.iter().enumerate() {
                         xor_value[i] ^= b;
                     }
@@ -348,7 +405,7 @@ impl BinaryFuseFilter {
             }
 
             // Assign to determining slot
-            let slot_data = &mut data[determining_slot * value_size..(determining_slot + 1) * value_size];
+            let slot_data = &mut data[determining_slot_usize * value_size..(determining_slot_usize + 1) * value_size];
             slot_data.copy_from_slice(&xor_value);
         }
 

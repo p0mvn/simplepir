@@ -269,6 +269,12 @@ impl CompactChecker {
     pub fn data(&self) -> &CompactHibpData {
         &self.data
     }
+    
+    /// Consume the checker and return the underlying data
+    /// Use this to transfer ownership and free memory after building PIR
+    pub fn into_data(self) -> CompactHibpData {
+        self.data
+    }
 }
 
 #[cfg(test)]

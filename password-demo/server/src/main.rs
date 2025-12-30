@@ -77,13 +77,16 @@ impl Checker {
 
 /// Application state shared across all handlers
 struct AppState {
-    checker: Checker,
+    /// Checker for direct hash lookups (None when PIR-only mode is active)
+    checker: Option<Checker>,
     /// DoublePIR server (initialized lazily or on startup)
     pir_server: Option<DoublePirServer>,
     /// Binary Fuse Filter parameters for client
     filter_params: Option<BinaryFuseParams>,
     /// LWE parameters
     lwe_params: Option<LweParams>,
+    /// Stats captured before dropping checker (for health endpoint)
+    cached_stats: Option<hibp::CheckerStats>,
 }
 
 // ============================================================================
@@ -254,21 +257,35 @@ struct PirQueryResponse {
 
 /// Health check endpoint
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let stats = state.checker.stats();
+    let (ranges_loaded, total_hashes) = if let Some(ref checker) = state.checker {
+        let stats = checker.stats();
+        (stats.ranges_loaded, stats.total_hashes)
+    } else if let Some(ref stats) = state.cached_stats {
+        (stats.ranges_loaded, stats.total_hashes)
+    } else {
+        (0, 0)
+    };
+    
     Json(HealthResponse {
         status: "ok",
-        ranges_loaded: stats.ranges_loaded,
-        total_hashes: stats.total_hashes,
+        ranges_loaded,
+        total_hashes,
         pir_enabled: state.pir_server.is_some(),
         pir_num_records: state.pir_server.as_ref().map(|s| s.num_records()),
     })
 }
 
 /// Check if a password hash is pwned
+/// Note: Disabled in PIR-only mode. Use /pir/query for private lookups.
 async fn check(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CheckRequest>,
 ) -> Result<Json<CheckResponse>, (StatusCode, String)> {
+    let checker = state.checker.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Direct hash checking disabled in PIR-only mode. Use /pir/query for private lookups.".to_string(),
+    ))?;
+
     // Validate hash format
     if payload.hash.len() != 40 {
         return Err((
@@ -289,7 +306,7 @@ async fn check(
     }
 
     // Look up the hash
-    match state.checker.check_hash(&payload.hash) {
+    match checker.check_hash(&payload.hash) {
         Ok(Some(count)) => Ok(Json(CheckResponse { pwned: true, count })),
         Ok(None) => Ok(Json(CheckResponse {
             pwned: false,
@@ -355,7 +372,7 @@ async fn pir_query(
 /// Create a demo database for PIR using real HIBP data from PasswordChecker
 fn create_pir_demo_database(
     checker: &PasswordChecker,
-) -> (BinaryFuseFilter, DoublePirDatabase, LweParams) {
+) -> (BinaryFuseParams, DoublePirDatabase, LweParams) {
     info!("Creating PIR demo database from PasswordChecker...");
 
     // Get real HIBP data from the loaded cache
@@ -402,45 +419,57 @@ fn create_pir_demo_database(
     build_pir_from_database(database)
 }
 
-/// Create a demo database for PIR using real HIBP data from CompactChecker
+/// Create PIR database by consuming CompactChecker data
+/// 
+/// This takes ownership of the checker and frees its ~48 GB of data
+/// after converting to PIR format. Returns cached stats for health endpoint.
 fn create_pir_demo_database_compact(
-    checker: &CompactChecker,
-) -> (BinaryFuseFilter, DoublePirDatabase, LweParams) {
+    checker: CompactChecker,
+) -> (BinaryFuseParams, DoublePirDatabase, LweParams, hibp::CheckerStats) {
     info!("Creating PIR database from CompactChecker (all entries)...");
 
-    // Get real HIBP data from the compact storage
-    let data = checker.data();
-    let total_entries = data.len();
+    // Capture stats before consuming the data
+    let stats = checker.stats();
+    let total_entries = stats.total_hashes;
     
     info!("Building PIR database with {} entries...", total_entries);
 
-    // Convert all entries to PIR format
-    let database: Vec<(String, Vec<u8>)> = data
-        .iter()
+    // Consume the checker and get ownership of entries
+    let entries = checker.into_data().into_entries();
+    
+    info!("Converting {} entries to PIR format...", entries.len());
+    let database: Vec<(String, Vec<u8>)> = entries
+        .into_iter()
         .map(|entry| {
-            // Convert hash bytes to uppercase hex string
             let hash_str = hex::encode_upper(entry.hash);
             let value = entry.count.to_le_bytes().to_vec();
             (hash_str, value)
         })
         .collect();
 
-    info!("Loaded {} HIBP entries for PIR", database.len());
+    info!("Loaded {} HIBP entries for PIR (original data freed)", database.len());
 
-    build_pir_from_database(database)
+    let (params, db, lwe) = build_pir_from_database(database);
+    (params, db, lwe, stats)
 }
 
 /// Build PIR database from key-value pairs
+/// Memory is carefully managed - drops intermediates as soon as possible
 fn build_pir_from_database(
     database: Vec<(String, Vec<u8>)>,
-) -> (BinaryFuseFilter, DoublePirDatabase, LweParams) {
+) -> (BinaryFuseParams, DoublePirDatabase, LweParams) {
     info!("PIR database: {} entries", database.len());
 
     let value_size = 4;
 
-    // Build Binary Fuse Filter with deterministic seed for consistent positions across restarts
-    let filter = BinaryFuseFilter::build_with_seed(&database, value_size, 0xDEADBEEF_CAFEBABE)
+    // Build Binary Fuse Filter with deterministic seed
+    // Use unchecked version to skip duplicate detection (saves RAM)
+    let filter = BinaryFuseFilter::build_with_seed_unchecked(&database, value_size, 0xDEADBEEF_CAFEBABE)
         .expect("Failed to build Binary Fuse Filter");
+
+    // Drop input database - no longer needed
+    drop(database);
+    info!("Freed input database memory");
 
     info!(
         "Binary Fuse Filter: {} entries -> {} slots (expansion: {:.2}x)",
@@ -449,10 +478,16 @@ fn build_pir_from_database(
         filter.expansion_factor()
     );
 
+    // Extract params before dropping filter
+    let filter_params = filter.params();
+
     // Convert to PIR database
-    let pir_records = filter.to_pir_records();
-    let record_refs: Vec<&[u8]> = pir_records.iter().map(|r| r.as_slice()).collect();
+    let record_refs = filter.as_records();
     let db = DoublePirDatabase::new(&record_refs, value_size);
+    
+    // Drop filter - data copied into PIR matrix
+    drop(filter);
+    info!("Freed Binary Fuse Filter data");
 
     // LWE parameters (test-friendly, not production secure)
     let lwe_params = LweParams {
@@ -461,7 +496,7 @@ fn build_pir_from_database(
         noise_stddev: 0.0, // Zero noise for demo (correctness over security)
     };
 
-    (filter, db, lwe_params)
+    (filter_params, db, lwe_params)
 }
 
 // ============================================================================
@@ -603,28 +638,42 @@ async fn main() {
         Checker::Standard(password_checker)
     };
 
-    // Initialize PIR if enabled (works with both Standard and Compact checkers)
-    let (pir_server, filter_params, lwe_params) = if pir_enabled {
-        let (filter, db, params) = match &checker {
+    // Initialize PIR if enabled
+    // For Compact checker: consume the data to free ~48 GB after PIR is built
+    // For Standard checker: keep the checker for /check endpoint  
+    let (checker, pir_server, filter_params, lwe_params, cached_stats) = if pir_enabled {
+        match checker {
             Checker::Standard(password_checker) => {
-                create_pir_demo_database(password_checker)
+                let (fuse_params, db, lwe_params) = create_pir_demo_database(&password_checker);
+                
+                let mut rng = rand::rng();
+                let server = DoublePirServer::new(db, &lwe_params, &mut rng);
+
+                info!("PIR server initialized:");
+                info!("  Records: {}", server.num_records());
+                info!("  Record size: {} bytes", server.record_size());
+                info!("  LWE dimension: {}", lwe_params.n);
+
+                (Some(Checker::Standard(password_checker)), Some(server), Some(fuse_params), Some(lwe_params), None)
             }
             Checker::Compact(compact_checker) => {
-                create_pir_demo_database_compact(compact_checker)
+                // CONSUME the checker to free ~48 GB RAM after PIR is built
+                let (fuse_params, db, lwe_params, stats) = create_pir_demo_database_compact(compact_checker);
+                
+                let mut rng = rand::rng();
+                let server = DoublePirServer::new(db, &lwe_params, &mut rng);
+
+                info!("PIR server initialized (PIR-only mode):");
+                info!("  Records: {}", server.num_records());
+                info!("  Record size: {} bytes", server.record_size());
+                info!("  LWE dimension: {}", lwe_params.n);
+                info!("  /check disabled - use /pir/query for private lookups");
+
+                (None, Some(server), Some(fuse_params), Some(lwe_params), Some(stats))
             }
-        };
-        
-        let mut rng = rand::rng();
-        let server = DoublePirServer::new(db, &params, &mut rng);
-
-        info!("PIR server initialized:");
-        info!("  Records: {}", server.num_records());
-        info!("  Record size: {} bytes", server.record_size());
-        info!("  LWE dimension: {}", params.n);
-
-        (Some(server), Some(filter.params()), Some(params))
+        }
     } else {
-        (None, None, None)
+        (Some(checker), None, None, None, None)
     };
 
     let state = Arc::new(AppState {
@@ -632,6 +681,7 @@ async fn main() {
         pir_server,
         filter_params,
         lwe_params,
+        cached_stats,
     });
 
     // Build router
