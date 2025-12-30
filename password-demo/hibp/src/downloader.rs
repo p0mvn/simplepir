@@ -49,6 +49,8 @@ impl Downloader {
             concurrent_requests: 150,
             client: reqwest::Client::builder()
                 .user_agent("pir-password-checker/0.1")
+                .timeout(std::time::Duration::from_secs(60))
+                .connect_timeout(std::time::Duration::from_secs(10))
                 .build()
                 .expect("Failed to create HTTP client"),
         }
@@ -271,6 +273,8 @@ impl InMemoryDownloader {
             concurrent_requests: 150,
             client: reqwest::Client::builder()
                 .user_agent("pir-password-checker/0.1")
+                .timeout(std::time::Duration::from_secs(60))
+                .connect_timeout(std::time::Duration::from_secs(10))
                 .build()
                 .expect("Failed to create HTTP client"),
         }
