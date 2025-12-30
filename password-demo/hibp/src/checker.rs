@@ -1,5 +1,6 @@
 //! Password checking against downloaded HIBP data
 
+use crate::compact::CompactHibpData;
 use crate::{hash_password, split_hash, Error};
 use std::collections::HashMap;
 use std::fs;
@@ -211,6 +212,63 @@ pub struct CheckerStats {
     pub ranges_loaded: usize,
     pub total_hashes: usize,
     pub in_memory: bool,
+}
+
+/// Compact password checker using binary format
+/// 
+/// Uses ~24 bytes per entry vs ~63 bytes with HashMap+String.
+/// For 2 billion entries: ~48 GB vs ~126 GB.
+pub struct CompactChecker {
+    data: CompactHibpData,
+}
+
+impl CompactChecker {
+    /// Create a checker from compact data
+    pub fn new(data: CompactHibpData) -> Self {
+        info!(
+            "Created CompactChecker with {} hashes ({:.2} GB)",
+            data.len(),
+            data.memory_usage() as f64 / 1024.0 / 1024.0 / 1024.0
+        );
+        Self { data }
+    }
+
+    /// Check if a password hash (hex string) is in the database
+    /// Returns Some(count) if found, None if not found
+    pub fn check_hash(&self, hash: &str) -> Result<Option<u32>, Error> {
+        if hash.len() != 40 {
+            return Err(Error::InvalidHash(format!(
+                "Expected 40 character SHA-1 hash, got {} characters",
+                hash.len()
+            )));
+        }
+        Ok(self.data.lookup_hex(hash))
+    }
+
+    /// Check if a password (plaintext) is in the database
+    pub fn check(&self, password: &str) -> Result<Option<u32>, Error> {
+        let hash = hash_password(password);
+        self.check_hash(&hash)
+    }
+
+    /// Get statistics
+    pub fn stats(&self) -> CheckerStats {
+        CheckerStats {
+            ranges_loaded: 0, // Not applicable for compact format
+            total_hashes: self.data.len(),
+            in_memory: true,
+        }
+    }
+
+    /// Get memory usage in bytes
+    pub fn memory_usage(&self) -> usize {
+        self.data.memory_usage()
+    }
+
+    /// Get reference to underlying data
+    pub fn data(&self) -> &CompactHibpData {
+        &self.data
+    }
 }
 
 #[cfg(test)]

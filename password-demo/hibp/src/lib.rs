@@ -24,10 +24,12 @@
 
 mod downloader;
 mod checker;
+mod compact;
 mod error;
 
-pub use downloader::{DownloadSize, Downloader, DownloadProgress, InMemoryDownloader};
-pub use checker::{PasswordChecker, CheckerStats};
+pub use downloader::{DownloadSize, Downloader, DownloadProgress, InMemoryDownloader, CompactDownloader};
+pub use checker::{PasswordChecker, CheckerStats, CompactChecker};
+pub use compact::{CompactHibpData, HashEntry};
 pub use error::Error;
 
 /// SHA-1 hash a password and return uppercase hex string

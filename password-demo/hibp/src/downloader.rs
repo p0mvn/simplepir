@@ -3,6 +3,7 @@
 //! Downloads password hash ranges from the HaveIBeenPwned API.
 //! Uses parallel HTTP requests for fast downloads.
 
+use crate::compact::{CompactHibpData, HashEntry};
 use crate::Error;
 use futures::{stream, StreamExt};
 use std::collections::HashMap;
@@ -424,6 +425,225 @@ impl InMemoryDownloader {
 }
 
 impl Default for InMemoryDownloader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Downloads HIBP data into compact binary format
+/// Uses ~24 bytes per entry vs ~63 bytes with HashMap+String
+pub struct CompactDownloader {
+    concurrent_requests: usize,
+    client: reqwest::Client,
+}
+
+impl CompactDownloader {
+    /// Create a new compact downloader
+    pub fn new() -> Self {
+        Self {
+            concurrent_requests: 150,
+            client: reqwest::Client::builder()
+                .user_agent("pir-password-checker/0.1")
+                .timeout(std::time::Duration::from_secs(60))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(200)
+                .build()
+                .expect("Failed to create HTTP client"),
+        }
+    }
+
+    /// Set the number of concurrent requests
+    pub fn with_concurrency(mut self, n: usize) -> Self {
+        self.concurrent_requests = n;
+        self
+    }
+
+    /// Download a single range and return entries as binary hash+count
+    async fn download_range_compact(&self, prefix: &str) -> Result<Vec<HashEntry>, Error> {
+        let url = format!("https://api.pwnedpasswords.com/range/{}", prefix);
+        let response = self.client.get(&url).send().await?;
+        let body = response.text().await?;
+
+        let mut entries = Vec::with_capacity(2000); // typical range size
+        
+        for line in body.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            // Format: SUFFIX:COUNT
+            if let Some((suffix, count_str)) = line.split_once(':') {
+                if let Ok(count) = count_str.parse::<u32>() {
+                    // Combine prefix + suffix and decode to bytes
+                    if let Some(hash) = Self::decode_hash(prefix, suffix) {
+                        entries.push(HashEntry::new(hash, count));
+                    }
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    /// Decode prefix (5 hex) + suffix (35 hex) to 20 bytes
+    fn decode_hash(prefix: &str, suffix: &str) -> Option<[u8; 20]> {
+        if prefix.len() != 5 || suffix.len() != 35 {
+            return None;
+        }
+        
+        let mut bytes = [0u8; 20];
+        let full = format!("{}{}", prefix, suffix);
+        
+        for (i, chunk) in full.as_bytes().chunks(2).enumerate() {
+            let high = Self::hex_nibble(chunk[0])?;
+            let low = Self::hex_nibble(chunk[1])?;
+            bytes[i] = (high << 4) | low;
+        }
+        
+        Some(bytes)
+    }
+
+    #[inline]
+    fn hex_nibble(c: u8) -> Option<u8> {
+        match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    /// Download HIBP data into compact binary format
+    /// 
+    /// Memory usage: ~24 bytes per entry
+    /// Full database (~2B entries): ~48 GB
+    pub async fn download_compact(
+        &self,
+        size: DownloadSize,
+    ) -> Result<CompactHibpData, Error> {
+        let prefixes = size.prefixes();
+        let total = prefixes.len();
+        
+        // Estimate total entries: ~2000 per prefix
+        let estimated_entries = total * 2000;
+        
+        info!(
+            "Starting compact download of {} HIBP dataset ({} ranges, ~{} entries)...",
+            size.description(),
+            total,
+            estimated_entries
+        );
+        info!(
+            "Estimated memory: {} GB",
+            (estimated_entries * 24) as f64 / 1024.0 / 1024.0 / 1024.0
+        );
+
+        // Collect all entries into a single Vec
+        let all_entries: Arc<Mutex<Vec<HashEntry>>> = 
+            Arc::new(Mutex::new(Vec::with_capacity(estimated_entries)));
+        let completed = Arc::new(AtomicUsize::new(0));
+        let errors = Arc::new(AtomicUsize::new(0));
+        let total_hashes = Arc::new(AtomicUsize::new(0));
+
+        stream::iter(prefixes)
+            .map(|prefix| {
+                let all_entries = Arc::clone(&all_entries);
+                let completed = Arc::clone(&completed);
+                let errors = Arc::clone(&errors);
+                let total_hashes = Arc::clone(&total_hashes);
+                async move {
+                    let mut attempts = 0;
+                    loop {
+                        let result = tokio::time::timeout(
+                            tokio::time::Duration::from_secs(60),
+                            self.download_range_compact(&prefix)
+                        ).await;
+
+                        match result {
+                            Ok(Ok(entries)) => {
+                                let hash_count = entries.len();
+                                total_hashes.fetch_add(hash_count, Ordering::SeqCst);
+                                
+                                // Append to main vector
+                                {
+                                    let mut all = all_entries.lock().unwrap();
+                                    all.extend(entries);
+                                }
+                                
+                                let current = completed.fetch_add(1, Ordering::SeqCst) + 1;
+                                if current % 1000 == 0 || current == total {
+                                    let pct = (current as f64 / total as f64) * 100.0;
+                                    let total_h = total_hashes.load(Ordering::SeqCst);
+                                    let mem_gb = (total_h * 24) as f64 / 1024.0 / 1024.0 / 1024.0;
+                                    info!(
+                                        "Progress: {}/{} ranges ({:.1}%) - {} hashes ({:.2} GB)",
+                                        current, total, pct, total_h, mem_gb
+                                    );
+                                }
+                                break;
+                            }
+                            Ok(Err(e)) => {
+                                attempts += 1;
+                                if attempts >= 3 {
+                                    warn!("Failed to download range {} after 3 attempts: {}", prefix, e);
+                                    errors.fetch_add(1, Ordering::SeqCst);
+                                    break;
+                                }
+                                warn!("Retry {}/3 for range {}: {}", attempts, prefix, e);
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempts)).await;
+                            }
+                            Err(_timeout) => {
+                                attempts += 1;
+                                if attempts >= 3 {
+                                    warn!("Range {} timed out after 3 attempts", prefix);
+                                    errors.fetch_add(1, Ordering::SeqCst);
+                                    break;
+                                }
+                                warn!("Timeout retry {}/3 for range {}", attempts, prefix);
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempts)).await;
+                            }
+                        }
+                    }
+                }
+            })
+            .buffer_unordered(self.concurrent_requests)
+            .collect::<Vec<_>>()
+            .await;
+
+        let error_count = errors.load(Ordering::SeqCst);
+        let success_count = completed.load(Ordering::SeqCst);
+        let hash_count = total_hashes.load(Ordering::SeqCst);
+
+        if error_count > 0 {
+            warn!(
+                "Download completed with {} errors ({} successful ranges, {} failed)",
+                error_count, success_count, error_count
+            );
+        }
+
+        info!("Sorting {} entries...", hash_count);
+        
+        // Extract entries and sort
+        let mut entries = Arc::try_unwrap(all_entries)
+            .expect("Arc should have single owner")
+            .into_inner()
+            .unwrap();
+        
+        entries.sort_unstable_by(|a, b| a.hash.cmp(&b.hash));
+        entries.shrink_to_fit();
+        
+        let mem_bytes = entries.len() * std::mem::size_of::<HashEntry>();
+        info!(
+            "Compact dataset ready: {} hashes, {:.2} GB",
+            entries.len(),
+            mem_bytes as f64 / 1024.0 / 1024.0 / 1024.0
+        );
+
+        Ok(CompactHibpData::from_sorted(entries))
+    }
+}
+
+impl Default for CompactDownloader {
     fn default() -> Self {
         Self::new()
     }
