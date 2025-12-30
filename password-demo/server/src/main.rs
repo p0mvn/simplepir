@@ -352,11 +352,11 @@ async fn pir_query(
 // PIR Demo Database
 // ============================================================================
 
-/// Create a demo database for PIR using real HIBP data
+/// Create a demo database for PIR using real HIBP data from PasswordChecker
 fn create_pir_demo_database(
     checker: &PasswordChecker,
 ) -> (BinaryFuseFilter, DoublePirDatabase, LweParams) {
-    info!("Creating PIR demo database from real HIBP data...");
+    info!("Creating PIR demo database from PasswordChecker...");
 
     // Get real HIBP data from the loaded cache
     // We use the full SHA-1 hash as the key (prefix + suffix)
@@ -399,6 +399,43 @@ fn create_pir_demo_database(
             .collect();
     }
 
+    build_pir_from_database(database)
+}
+
+/// Create a demo database for PIR using real HIBP data from CompactChecker
+fn create_pir_demo_database_compact(
+    checker: &CompactChecker,
+) -> (BinaryFuseFilter, DoublePirDatabase, LweParams) {
+    info!("Creating PIR demo database from CompactChecker...");
+
+    // Get real HIBP data from the compact storage
+    let data = checker.data();
+    
+    // Collect entries sorted by count descending to get most-breached passwords
+    let mut all_entries: Vec<_> = data.iter().collect();
+    all_entries.sort_by(|a, b| b.count.cmp(&a.count));
+
+    // Take top 200 entries and convert to PIR format
+    let database: Vec<(String, Vec<u8>)> = all_entries
+        .into_iter()
+        .take(200)
+        .map(|entry| {
+            // Convert hash bytes to uppercase hex string
+            let hash = hex::encode_upper(entry.hash);
+            let value = entry.count.to_le_bytes().to_vec();
+            (hash, value)
+        })
+        .collect();
+
+    info!("Loaded {} real HIBP entries for PIR demo", database.len());
+
+    build_pir_from_database(database)
+}
+
+/// Build PIR database from key-value pairs
+fn build_pir_from_database(
+    database: Vec<(String, Vec<u8>)>,
+) -> (BinaryFuseFilter, DoublePirDatabase, LweParams) {
     info!("PIR database: {} entries", database.len());
 
     let value_size = 4;
@@ -568,27 +605,26 @@ async fn main() {
         Checker::Standard(password_checker)
     };
 
-    // Initialize PIR if enabled (only works with Standard checker that has cache)
+    // Initialize PIR if enabled (works with both Standard and Compact checkers)
     let (pir_server, filter_params, lwe_params) = if pir_enabled {
-        match &checker {
+        let (filter, db, params) = match &checker {
             Checker::Standard(password_checker) => {
-                let (filter, db, params) = create_pir_demo_database(password_checker);
-                let mut rng = rand::rng();
-                let server = DoublePirServer::new(db, &params, &mut rng);
-
-                info!("PIR server initialized:");
-                info!("  Records: {}", server.num_records());
-                info!("  Record size: {} bytes", server.record_size());
-                info!("  LWE dimension: {}", params.n);
-
-                (Some(server), Some(filter.params()), Some(params))
+                create_pir_demo_database(password_checker)
             }
-            Checker::Compact(_) => {
-                warn!("PIR not supported with compact checker (in-memory download mode)");
-                warn!("PIR requires file-based loading to access raw data");
-                (None, None, None)
+            Checker::Compact(compact_checker) => {
+                create_pir_demo_database_compact(compact_checker)
             }
-        }
+        };
+        
+        let mut rng = rand::rng();
+        let server = DoublePirServer::new(db, &params, &mut rng);
+
+        info!("PIR server initialized:");
+        info!("  Records: {}", server.num_records());
+        info!("  Record size: {} bytes", server.record_size());
+        info!("  LWE dimension: {}", params.n);
+
+        (Some(server), Some(filter.params()), Some(params))
     } else {
         (None, None, None)
     };

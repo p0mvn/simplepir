@@ -115,6 +115,11 @@ impl CompactHibpData {
         self.entries.capacity() * std::mem::size_of::<HashEntry>()
     }
 
+    /// Get an iterator over all entries
+    pub fn iter(&self) -> impl Iterator<Item = &HashEntry> {
+        self.entries.iter()
+    }
+
     /// Decode a 40-character hex string to 20 bytes
     fn decode_hex(hex: &str) -> Option<HashBytes> {
         if hex.len() != 40 {
