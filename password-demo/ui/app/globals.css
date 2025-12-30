@@ -4,84 +4,54 @@
 
 :root {
   --foreground-rgb: 255, 255, 255;
-  --background-start-rgb: 10, 10, 15;
-  --background-end-rgb: 20, 25, 30;
+  --background-rgb: 2, 6, 23;
 }
 
 body {
   color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-    135deg,
-    rgb(var(--background-start-rgb)) 0%,
-    rgb(var(--background-end-rgb)) 100%
-  );
+  background: rgb(var(--background-rgb));
   min-height: 100vh;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
-/* Custom grid background pattern */
-.grid-pattern {
-  background-image: 
-    linear-gradient(rgba(20, 184, 166, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(20, 184, 166, 0.03) 1px, transparent 1px);
-  background-size: 50px 50px;
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
 }
 
-/* Radial gradient overlay */
-.radial-overlay {
-  background: radial-gradient(
-    ellipse at 50% 0%,
-    rgba(20, 184, 166, 0.12) 0%,
-    transparent 50%
-  );
+/* Focus visible styles */
+*:focus-visible {
+  outline: 2px solid rgba(139, 92, 246, 0.5);
+  outline-offset: 2px;
 }
 
-/* Input focus glow */
-.input-glow:focus {
-  box-shadow: 
-    0 0 0 2px rgba(20, 184, 166, 0.3),
-    0 0 30px rgba(20, 184, 166, 0.2);
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-/* Status card animations */
-.status-safe {
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(34, 197, 94, 0.05) 100%);
-  border-color: rgba(34, 197, 94, 0.4);
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
 }
 
-.status-danger {
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
-  border-color: rgba(239, 68, 68, 0.4);
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
 }
 
-/* Loading spinner */
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 
-.spinner {
-  animation: spin 1s linear infinite;
+/* Selection colors */
+::selection {
+  background: rgba(139, 92, 246, 0.3);
+  color: white;
 }
 
-/* Scanline effect */
-.scanlines::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0, 0, 0, 0.05) 2px,
-    rgba(0, 0, 0, 0.05) 4px
-  );
-  pointer-events: none;
-  z-index: 10;
-}
-
-/* Number format animation */
-@keyframes countUp {
+/* Animations */
+@keyframes fadeIn {
   from {
     opacity: 0;
     transform: translateY(10px);
@@ -92,37 +62,64 @@ body {
   }
 }
 
-.count-animate {
-  animation: countUp 0.3s ease-out forwards;
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-/* Eye icon toggle */
-.eye-icon {
-  transition: all 0.2s ease;
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
-.eye-icon:hover {
-  transform: scale(1.1);
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-/* Attribution link styling */
-.attribution-link {
-  position: relative;
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
 }
 
-.attribution-link::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 0;
-  height: 1px;
-  background: currentColor;
-  transition: width 0.3s ease;
+.animate-slide-up {
+  animation: slideUp 0.6s ease-out forwards;
 }
 
-.attribution-link:hover::after {
-  width: 100%;
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
 
+/* Input autofill styles */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px rgba(30, 41, 59, 0.8) inset !important;
+  -webkit-text-fill-color: white !important;
+  caret-color: white;
+}
+
+/* Disable number input spinners */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
