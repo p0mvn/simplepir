@@ -406,28 +406,26 @@ fn create_pir_demo_database(
 fn create_pir_demo_database_compact(
     checker: &CompactChecker,
 ) -> (BinaryFuseFilter, DoublePirDatabase, LweParams) {
-    info!("Creating PIR demo database from CompactChecker...");
+    info!("Creating PIR database from CompactChecker (all entries)...");
 
     // Get real HIBP data from the compact storage
     let data = checker.data();
+    let total_entries = data.len();
     
-    // Collect entries sorted by count descending to get most-breached passwords
-    let mut all_entries: Vec<_> = data.iter().collect();
-    all_entries.sort_by(|a, b| b.count.cmp(&a.count));
+    info!("Building PIR database with {} entries...", total_entries);
 
-    // Take top 200 entries and convert to PIR format
-    let database: Vec<(String, Vec<u8>)> = all_entries
-        .into_iter()
-        .take(200)
+    // Convert all entries to PIR format
+    let database: Vec<(String, Vec<u8>)> = data
+        .iter()
         .map(|entry| {
             // Convert hash bytes to uppercase hex string
-            let hash = hex::encode_upper(entry.hash);
+            let hash_str = hex::encode_upper(entry.hash);
             let value = entry.count.to_le_bytes().to_vec();
-            (hash, value)
+            (hash_str, value)
         })
         .collect();
 
-    info!("Loaded {} real HIBP entries for PIR demo", database.len());
+    info!("Loaded {} HIBP entries for PIR", database.len());
 
     build_pir_from_database(database)
 }
