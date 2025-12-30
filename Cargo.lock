@@ -637,13 +637,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hibp"
+version = "0.1.0"
+source = "git+https://github.com/p0mvn/pir.git?branch=main#e78f0b19cbf2d7ec5e457be38b14e683fc4a32c9"
+dependencies = [
+ "futures",
+ "hex",
+ "reqwest",
+ "sha1",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hibp-server"
 version = "0.1.0"
 dependencies = [
  "axum",
  "dotenvy",
  "hex",
- "hibp",
+ "hibp 0.1.0 (git+https://github.com/p0mvn/pir.git?branch=main)",
  "pir 0.1.0 (git+https://github.com/p0mvn/pir.git?branch=main)",
  "rand",
  "serde",

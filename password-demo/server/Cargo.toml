@@ -18,8 +18,8 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# HIBP library (local dependency)
-hibp = { path = "../hibp" }
+# HIBP library (from public GitHub repo)
+hibp = { git = "https://github.com/p0mvn/pir.git", branch = "main" }
 
 # PIR library (from public GitHub repo)
 pir = { git = "https://github.com/p0mvn/pir.git", branch = "main" }
