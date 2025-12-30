@@ -347,21 +347,22 @@ impl BinaryFuseFilter {
     ) -> Result<Self, BinaryFuseError> {
         let n = pairs.len();
 
-        // Compute fingerprints and positions for all keys
-        // Memory: n * (8 + 12 + 16) = ~36 bytes per entry
-        let mut keys_info: Vec<(u64, [u32; 3], &[u8])> = Vec::with_capacity(n);
+        // Compute positions for all keys
+        // Memory optimization: don't store hash (u64) - saves 8 bytes/entry = 16GB for 2B entries
+        // positions: [u32; 3] = 12 bytes, value_ref: &[u8] = 8 bytes = 20 bytes total
+        let mut keys_info: Vec<([u32; 3], &[u8])> = Vec::with_capacity(n);
         for (key, value) in pairs {
             let hash = hash_key(key, seed);
             let positions = compute_positions(hash, segment_size, segment_length_mask);
             // Store positions as u32 to save memory (filter_size < 4B for reasonable inputs)
-            keys_info.push((hash, [positions[0] as u32, positions[1] as u32, positions[2] as u32], value.as_slice()));
+            keys_info.push(([positions[0] as u32, positions[1] as u32, positions[2] as u32], value.as_slice()));
         }
 
         // Build degree counters for each slot
         // Memory: filter_size * 4 bytes
         let mut degree = vec![0u32; filter_size];
         
-        for (_, positions, _) in keys_info.iter() {
+        for (positions, _) in keys_info.iter() {
             for &pos in positions {
                 degree[pos as usize] += 1;
             }
@@ -371,7 +372,7 @@ impl BinaryFuseFilter {
         // Memory: n * 3 * 8 bytes (instead of filter_size * 24 bytes for Vec<Vec>)
         // This is the key optimization - avoids allocating billions of empty Vecs
         let mut slot_key_pairs: Vec<(u32, u32)> = Vec::with_capacity(n * 3);
-        for (key_idx, (_, positions, _)) in keys_info.iter().enumerate() {
+        for (key_idx, (positions, _)) in keys_info.iter().enumerate() {
             for &pos in positions {
                 slot_key_pairs.push((pos, key_idx as u32));
             }
@@ -433,7 +434,7 @@ impl BinaryFuseFilter {
             stack.push((key_idx, slot));
 
             // Decrease degree for all positions of this key
-            let (_, positions, _) = &keys_info[key_idx as usize];
+            let (positions, _) = &keys_info[key_idx as usize];
             for &pos in positions {
                 degree[pos as usize] = degree[pos as usize].saturating_sub(1);
                 if degree[pos as usize] == 1 {
@@ -457,7 +458,7 @@ impl BinaryFuseFilter {
         let mut data = vec![0u8; filter_size * value_size];
 
         while let Some((key_idx, determining_slot)) = stack.pop() {
-            let (_, positions, value) = &keys_info[key_idx as usize];
+            let (positions, value) = &keys_info[key_idx as usize];
 
             // XOR other two positions to get what this slot should be
             let mut xor_value = value.to_vec();
@@ -500,17 +501,19 @@ impl BinaryFuseFilter {
     ) -> Result<Self, BinaryFuseError> {
         let n = pairs.len();
 
-        // Compute fingerprints and positions for all keys
-        let mut keys_info: Vec<(u64, [u32; 3], &[u8])> = Vec::with_capacity(n);
+        // Compute positions for all keys
+        // Memory optimization: don't store hash (u64) - saves 8 bytes/entry = 16GB for 2B entries
+        // positions: [u32; 3] = 12 bytes, value_ref: &[u8] = 8 bytes = 20 bytes total
+        let mut keys_info: Vec<([u32; 3], &[u8])> = Vec::with_capacity(n);
         for (key, value) in pairs {
             let hash = hash_key(key, seed);
             let positions = compute_positions(hash, segment_size, segment_length_mask);
-            keys_info.push((hash, [positions[0] as u32, positions[1] as u32, positions[2] as u32], value.as_slice()));
+            keys_info.push(([positions[0] as u32, positions[1] as u32, positions[2] as u32], value.as_slice()));
         }
 
         // Build degree counters
         let mut degree = vec![0u32; filter_size];
-        for (_, positions, _) in keys_info.iter() {
+        for (positions, _) in keys_info.iter() {
             for &pos in positions {
                 degree[pos as usize] += 1;
             }
@@ -518,7 +521,7 @@ impl BinaryFuseFilter {
 
         // Build flat sorted array of (slot, key_idx)
         let mut slot_key_pairs: Vec<(u32, u32)> = Vec::with_capacity(n * 3);
-        for (key_idx, (_, positions, _)) in keys_info.iter().enumerate() {
+        for (key_idx, (positions, _)) in keys_info.iter().enumerate() {
             for &pos in positions {
                 slot_key_pairs.push((pos, key_idx as u32));
             }
@@ -565,7 +568,7 @@ impl BinaryFuseFilter {
             processed[key_idx as usize] = true;
             stack.push((key_idx, slot));
 
-            let (_, positions, _) = &keys_info[key_idx as usize];
+            let (positions, _) = &keys_info[key_idx as usize];
             for &pos in positions {
                 degree[pos as usize] = degree[pos as usize].saturating_sub(1);
                 if degree[pos as usize] == 1 { queue.push(pos); }
@@ -585,7 +588,7 @@ impl BinaryFuseFilter {
         let mut data = vec![0u8; filter_size * value_size];
 
         while let Some((key_idx, determining_slot)) = stack.pop() {
-            let (_, positions, value) = &keys_info[key_idx as usize];
+            let (positions, value) = &keys_info[key_idx as usize];
             let mut xor_value = value.to_vec();
             let det = determining_slot as usize;
 

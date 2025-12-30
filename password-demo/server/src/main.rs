@@ -438,21 +438,39 @@ fn create_pir_demo_database_compact(
     info!("Building PIR database with {} entries...", total_entries);
 
     // Consume the checker and get ownership of entries
-    let entries = checker.into_data().into_entries();
+    let mut entries = checker.into_data().into_entries();
     
-    // Ultra memory-efficient: use [u8; 20] keys AND [u8; 4] values directly
-    // This saves ~68 bytes per entry (92 → 24 bytes)
-    // For 900M entries: saves ~61 GB!
-    info!("Converting {} entries to PIR format (zero-copy)...", entries.len());
-    let database: Vec<([u8; 20], [u8; 4])> = entries
-        .into_iter()
-        .map(|entry| {
-            // Use raw bytes directly - no String/Vec allocation!
-            (entry.hash, entry.count.to_le_bytes())
-        })
-        .collect();
-
-    info!("Loaded {} HIBP entries for PIR (original data freed)", database.len());
+    // CRITICAL MEMORY OPTIMIZATION:
+    // Instead of collecting into a new Vec (which doubles memory to ~96 GB),
+    // we convert in-place. HashEntry and ([u8;20], [u8;4]) are both 24 bytes.
+    // This keeps peak memory at ~48 GB instead of ~96 GB.
+    info!("Converting {} entries to PIR format (in-place)...", entries.len());
+    
+    // Convert count to little-endian bytes in-place
+    // This modifies the u32 count field to its LE byte representation
+    // which is what we need for the PIR value
+    for entry in entries.iter_mut() {
+        // Overwrite count with its LE bytes representation
+        // Safe because u32 and [u8; 4] have the same size
+        entry.count = u32::from_ne_bytes(entry.count.to_le_bytes());
+    }
+    
+    // Now transmute the Vec<HashEntry> to Vec<([u8; 20], [u8; 4])>
+    // This is safe because:
+    // 1. Both types are 24 bytes with #[repr(C)] / tuple layout
+    // 2. HashEntry = { hash: [u8; 20], count: u32 } 
+    // 3. Target = ([u8; 20], [u8; 4])
+    // 4. We've already converted count to LE bytes
+    let database: Vec<([u8; 20], [u8; 4])> = unsafe {
+        let mut entries = std::mem::ManuallyDrop::new(entries);
+        Vec::from_raw_parts(
+            entries.as_mut_ptr() as *mut ([u8; 20], [u8; 4]),
+            entries.len(),
+            entries.capacity(),
+        )
+    };
+    
+    info!("Converted {} HIBP entries for PIR (zero-copy, in-place)", database.len());
 
     let (params, db, lwe) = build_pir_from_database_fixed(database);
     (params, db, lwe, stats)
