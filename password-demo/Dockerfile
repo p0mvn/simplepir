@@ -4,6 +4,9 @@
 # In Railway: set Root Directory to "/" or leave empty, and set dockerfilePath to "password-demo/Dockerfile"
 FROM rust:1.83-slim-bookworm AS builder
 
+# Cache bust: v2 - changed build context to project root
+ARG CACHEBUST=2
+
 WORKDIR /app
 
 # Install build dependencies
@@ -14,9 +17,9 @@ RUN apt-get update && apt-get install -y \
 
 # Copy all required crates (server depends on hibp and pir via path)
 # With build context at project root:
+COPY pir ./pir
 COPY password-demo/hibp ./password-demo/hibp
 COPY password-demo/server ./password-demo/server
-COPY pir ./pir
 
 WORKDIR /app/password-demo/server
 
