@@ -1,8 +1,6 @@
 # Build stage
 FROM rust:1.83-slim-bookworm AS builder
 
-WORKDIR /app
-
 # Install build dependencies (git needed for fetching pir crate from GitHub)
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -10,11 +8,16 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy local crates (pir is fetched from GitHub via Cargo)
-COPY hibp ./hibp
-COPY server ./server
+# Copy hibp library first
+WORKDIR /app/hibp
+COPY hibp/Cargo.toml hibp/Cargo.lock* ./
+COPY hibp/src ./src
+COPY hibp/examples ./examples
 
+# Copy server and build
 WORKDIR /app/server
+COPY server/Cargo.toml server/Cargo.lock* ./
+COPY server/src ./src
 
 # Build release binary
 RUN cargo build --release
