@@ -1,4 +1,7 @@
 # Build stage
+# NOTE: Build context must be the PROJECT ROOT (not password-demo/)
+# so that we can access both password-demo/* and pir/* directories.
+# In Railway: set Root Directory to "/" or leave empty, and set dockerfilePath to "password-demo/Dockerfile"
 FROM rust:1.83-slim-bookworm AS builder
 
 WORKDIR /app
@@ -9,11 +12,13 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy both crates (server depends on hibp via path)
-COPY hibp ./hibp
-COPY server ./server
+# Copy all required crates (server depends on hibp and pir via path)
+# With build context at project root:
+COPY password-demo/hibp ./password-demo/hibp
+COPY password-demo/server ./password-demo/server
+COPY pir ./pir
 
-WORKDIR /app/server
+WORKDIR /app/password-demo/server
 
 # Build release binary
 RUN cargo build --release
@@ -29,7 +34,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/server/target/release/hibp-server /app/hibp-server
+COPY --from=builder /app/password-demo/server/target/release/hibp-server /app/hibp-server
 
 # Create data directory (used when loading from files)
 RUN mkdir -p /app/data/ranges

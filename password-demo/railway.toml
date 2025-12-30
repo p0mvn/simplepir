@@ -1,17 +1,23 @@
+# DEPRECATED: Railway config has moved to the project root
+# See /railway.toml for the active configuration
+#
+# This is necessary because the server depends on the pir/ crate at the project root,
+# so the Docker build context must be the project root to access both directories.
+#
+# If you need to configure Railway manually:
+# - Set Root Directory to empty (use repo root)
+# - The Dockerfile path will be: password-demo/Dockerfile
+
 [build]
 builder = "dockerfile"
 dockerfilePath = "./Dockerfile"
 
 [deploy]
 healthcheckPath = "/health"
-# Increased timeout to allow for HIBP data download on startup
-# tiny: ~2s, sample: ~5min, full: ~15min
 healthcheckTimeout = 900
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
-# Volume is optional - only needed if NOT using HIBP_DOWNLOAD_ON_START
-# When HIBP_DOWNLOAD_ON_START is set, data is downloaded directly to memory
 [[volumes]]
 mount = "/app/data/ranges"
 name = "hibp-data"

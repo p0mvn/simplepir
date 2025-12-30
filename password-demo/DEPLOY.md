@@ -62,10 +62,12 @@ vercel --prod
 
 In the Railway service settings:
 
-- **Root Directory**: `password-demo`
+- **Root Directory**: Leave empty (use repo root) - Required for PIR support since the server depends on the `pir/` crate at project root
 - **Builder**: Dockerfile
-- **Dockerfile Path**: `Dockerfile`
-- **Watch Paths**: `password-demo/server/**`, `password-demo/hibp/**`
+- **Dockerfile Path**: `password-demo/Dockerfile`
+- **Watch Paths**: `password-demo/**`, `pir/**`
+
+> **Important**: The server uses the `pir` crate from `../../pir`. The Docker build context must be at the project root to access both `password-demo/` and `pir/` directories.
 
 ### Step 3: Set Environment Variables
 

@@ -1,0 +1,24 @@
+# Railway configuration for HIBP Password Checker with PIR
+# 
+# This config uses the project root as build context so Docker can access
+# both password-demo/* and pir/* directories.
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "password-demo/Dockerfile"
+watchPaths = ["password-demo/**", "pir/**"]
+
+[deploy]
+healthcheckPath = "/health"
+# Increased timeout to allow for HIBP data download on startup
+# tiny: ~2s, sample: ~5min, full: ~15min
+healthcheckTimeout = 900
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# Volume is optional - only needed if NOT using HIBP_DOWNLOAD_ON_START
+# When HIBP_DOWNLOAD_ON_START is set, data is downloaded directly to memory
+[[volumes]]
+mount = "/app/data/ranges"
+name = "hibp-data"
+
