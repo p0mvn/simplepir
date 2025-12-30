@@ -639,7 +639,7 @@ dependencies = [
 [[package]]
 name = "hibp"
 version = "0.1.0"
-source = "git+https://github.com/p0mvn/pir.git?rev=8c898cf#8c898cff21a07da4d704e1db485cef512b6031f8"
+source = "git+https://github.com/p0mvn/pir.git?rev=7f82854#7f828547cdb87f4a20e87767332bef3e7c528214"
 dependencies = [
  "futures",
  "hex",
@@ -657,8 +657,8 @@ dependencies = [
  "axum",
  "dotenvy",
  "hex",
- "hibp 0.1.0 (git+https://github.com/p0mvn/pir.git?rev=8c898cf)",
- "pir 0.1.0 (git+https://github.com/p0mvn/pir.git?rev=8c898cf)",
+ "hibp 0.1.0 (git+https://github.com/p0mvn/pir.git?rev=7f82854)",
+ "pir 0.1.0 (git+https://github.com/p0mvn/pir.git?rev=7f82854)",
  "rand",
  "serde",
  "serde_json",
@@ -1201,7 +1201,7 @@ dependencies = [
 [[package]]
 name = "pir"
 version = "0.1.0"
-source = "git+https://github.com/p0mvn/pir.git?rev=8c898cf#8c898cff21a07da4d704e1db485cef512b6031f8"
+source = "git+https://github.com/p0mvn/pir.git?rev=7f82854#7f828547cdb87f4a20e87767332bef3e7c528214"
 dependencies = [
  "rand",
  "rand_chacha",
